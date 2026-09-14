@@ -391,6 +391,25 @@ button#refreshBtn:disabled {
   font-size: 11px;
 }
 
+.place-bet-btn {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 20px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.place-bet-btn:hover {
+  background: var(--accent);
+  color: white;
+}
+
 .empty, .error-state {
   text-align: center;
   color: var(--muted);

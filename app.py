@@ -185,6 +185,7 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
                     "selection": leg.get("selection", ""),
                     "odds_american": _format_american_odds(leg.get("odds_american")),
                     "stake_percent": leg.get("stake_percent", 0),
+                    "deep_link": leg.get("deep_link"),
                 }
                 for leg in raw_legs
             ],
@@ -401,6 +402,7 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
                 "selection": leg.get("selection", ""),
                 "odds_american": _format_american_odds(leg.get("odds_american")),
                 "stake_percent": round(stake_percent, 2),
+                "deep_link": leg.get("deep_link"),
             })
 
         arbs.append({

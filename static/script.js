@@ -346,6 +346,9 @@ function renderArbs() {
       const legsHtml = arb.legs
         .map((leg) => {
           const stakeAmount = (totalStake * (leg.stake_percent / 100)).toFixed(2);
+          const placeBetBtn = leg.deep_link
+            ? `<a class="place-bet-btn" href="${leg.deep_link}" target="_blank" rel="noopener noreferrer">Place Bet →</a>`
+            : "";
           return `
             <div class="leg-col">
               <div class="leg-book">${leg.sportsbook}</div>
@@ -353,6 +356,7 @@ function renderArbs() {
               <div class="leg-odds">${leg.odds_american}</div>
               <div class="leg-stake">Bet $${stakeAmount}</div>
               <div class="leg-stake-pct">${leg.stake_percent.toFixed(1)}% of stake</div>
+              ${placeBetBtn}
             </div>
           `;
         })
