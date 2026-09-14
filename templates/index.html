@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arb Screener</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Arb Screener</h1>
+      <div class="controls">
+        <label class="stake-label">
+          Total stake
+          <input type="number" id="totalStake" value="100" min="0" step="1" inputmode="decimal" />
+        </label>
+        <label class="auto-refresh-label">
+          <input type="checkbox" id="autoRefresh" checked />
+          Auto-refresh
+        </label>
+        <button id="refreshBtn" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <div class="books-header">
+      <span class="books-title">Sportsbooks</span>
+      <button id="toggleAllBtn" class="toggle-all-btn" type="button" style="display: none;">Select All</button>
+    </div>
+    <div id="booksPanel" class="books-panel"></div>
+
+    <div id="status" class="status"></div>
+    <div id="arbList" class="arb-list"></div>
+  </div>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
