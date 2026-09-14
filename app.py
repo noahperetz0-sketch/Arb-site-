@@ -256,7 +256,15 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     say WHICH player a row is about (two different players' passing-yards
     props share the same market_type), and matching that reliably would
     mean parsing player names out of free-text selection strings — too
-    fragile to trust with real money.
+    fragile to trust with real money. Checked two ways: SharpAPI's own
+    is_player_prop flag, AND the literal word "player" in market_type -
+    the flag alone let a real case through (a WNBA "1st quarter player
+    points" market where is_player_prop was apparently not set), matching
+    two different players' point totals against each other as if they were
+    one 2-way market. Every player-prop market_type actually seen so far
+    (NFL passing/rushing/receiving yards, WNBA player points, etc.) has
+    literally contained "player" in its name, so this substring check is a
+    reliable backstop independent of whether the flag is trustworthy.
 
     Rows SharpAPI itself flags as is_stale_pregame_price are dropped before
     ever entering the "best price" comparison - an old, unrefreshed price
@@ -271,6 +279,8 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         if not row.get("is_active", True):
             continue
         if row.get("is_player_prop"):
+            continue
+        if "player" in (row.get("market_type") or "").lower():
             continue
         if row.get("is_stale_pregame_price"):
             continue
