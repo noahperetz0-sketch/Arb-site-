@@ -10,22 +10,55 @@ app = Flask(__name__)
 SHARPAPI_KEY = os.environ.get("SHARPAPI_KEY", "")
 SHARPAPI_BASE_URL = os.environ.get("SHARPAPI_BASE_URL", "https://api.sharpapi.io")
 
-# Comma-separated list of the 5 books you picked in your SharpAPI dashboard.
-# Update this once you know your final 5 (or set it as an env var instead).
+# The 5 sportsbooks your Hobby plan is scoped to, comma-separated ids
+# (lowercase, no spaces — e.g. "draftkings", confirmed against a real
+# response from SharpAPI's own playground).
 SHARPAPI_BOOKS = os.environ.get(
     "SHARPAPI_BOOKS",
     "draftkings,fanduel,betmgm,caesars,fanatics",
 )
 
-# Real cross-book arbs are almost always single digits. Anything above this,
-# on either the paid or free-tier scan, is far more likely to be stale or
-# incomplete data than free money, so it's dropped rather than shown.
+# SharpAPI's /odds endpoint requires a sport+league pair. Override per
+# request with ?sport=&league= on /api/arbs, or change these env vars, if
+# you want something other than NFL.
+DEFAULT_SPORT = os.environ.get("SHARPAPI_SPORT", "football")
+DEFAULT_LEAGUE = os.environ.get("SHARPAPI_LEAGUE", "nfl")
+
+# Real cross-book arbs are almost always single digits. Anything above this
+# is far more likely to be stale or mismatched data than free money, so
+# it's dropped rather than shown.
 MAX_SANE_PROFIT_PERCENT = 25.0
 
+# Rows returned per sportsbook per scan. We only read the first page per
+# book rather than following pagination — chasing every page across 5
+# books would burn through the plan's request budget fast, at the cost of
+# only seeing whichever events/markets SharpAPI returns first. Revisit this
+# once you know your plan's actual rate limit.
+ODDS_PAGE_LIMIT = 200
+
 # Short in-memory cache so rapid book-toggle clicks or multiple open tabs
-# don't burn through the API's per-minute request budget.
+# don't burn through the API's request budget.
 ARBS_CACHE_TTL_SECONDS = 8
 _arbs_cache = {}  # cache key -> (timestamp, response_dict)
+
+BOOK_DISPLAY_NAMES = {
+    "draftkings": "DraftKings",
+    "fanduel": "FanDuel",
+    "betmgm": "BetMGM",
+    "caesars": "Caesars",
+    "fanatics": "Fanatics",
+}
+
+
+def _book_display_name(book_id):
+    return BOOK_DISPLAY_NAMES.get(book_id, book_id.title())
+
+
+BOOKS = [
+    {"id": b.strip(), "display_name": _book_display_name(b.strip())}
+    for b in SHARPAPI_BOOKS.split(",")
+    if b.strip()
+]
 
 # Mock data used only when no API key is set, so the site is viewable
 # immediately without any setup. Once SHARPAPI_KEY is set, real data is used.
@@ -54,8 +87,8 @@ MOCK_ARBS = [
 def _normalize_book(name):
     """Collapses a book id/display name to a bare-lowercase key
     ('DraftKings' / 'draft-kings' / 'draftkings' all -> 'draftkings') so we
-    can compare the toggle selection against whatever casing SharpAPI's
-    leg.sportsbook field happens to use."""
+    can compare the toggle selection against whatever casing a leg's
+    sportsbook field happens to use."""
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 
@@ -65,19 +98,14 @@ def _format_american_odds(value):
     return str(value)
 
 
-class TierRestrictedError(Exception):
-    pass
-
-
 def fetch_arbs_paid(min_profit=0.5, books=None):
-    """Calls SharpAPI's real, pre-computed arbitrage endpoint (Hobby+ only).
-    Response shape: {"data": [{"event_name", "profit_percent",
-    "legs": [{"sportsbook","selection","odds_american","stake_percent"}, ...],
-    "possibly_stale", "oldest_odds_age_seconds", "warnings": [...]}], ...}
-
-    We don't fully trust the server-side `sportsbook` filter param or its
-    own staleness/profit filtering to be applied exactly the way we expect,
-    so everything here is re-checked client-side as well."""
+    """Attempts SharpAPI's pre-computed arbitrage endpoint, IF your plan
+    actually has it. As of testing, no "Opportunities"/"Arbitrage" tab shows
+    up anywhere in SharpAPI's own playground (only Odds/Events/Game State),
+    so this may simply not exist as a real, callable endpoint — treat it as
+    a bonus attempt. api_arbs() below falls back to compute_arbs_from_odds()
+    (built from the confirmed-real /odds endpoint) if this fails for any
+    reason at all, not just a 403."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     params = {"min_profit": min_profit, "sportsbook": books or SHARPAPI_BOOKS}
     resp = requests.get(
@@ -86,8 +114,6 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
         params=params,
         timeout=10,
     )
-    if resp.status_code == 403:
-        raise TierRestrictedError(resp.text)
     resp.raise_for_status()
     data = resp.json().get("data", [])
 
@@ -95,8 +121,6 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
 
     arbs = []
     for arb in data:
-        # Skip anything flagged as possibly stale or a known-suspicious pattern —
-        # these look attractive but usually aren't real, actionable arbs.
         if arb.get("possibly_stale"):
             continue
         if any("SUSPICIOUS" in w or "STALE" in w for w in arb.get("warnings", [])):
@@ -109,9 +133,6 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
         raw_legs = arb.get("legs", [])
         if len(raw_legs) < 2:
             continue
-        # Every leg must be a book the user actually has toggled on — if the
-        # API's own filter param didn't honor that, an arb with an unselected
-        # book's leg is unbeatable to the user and must not be shown.
         if not all(_normalize_book(leg.get("sportsbook")) in allowed_books for leg in raw_legs):
             continue
 
@@ -132,94 +153,56 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
     return arbs
 
 
-DEFAULT_BOOKS = [
-    {"id": "draftkings", "display_name": "DraftKings"},
-    {"id": "fanduel", "display_name": "FanDuel"},
-    {"id": "betmgm", "display_name": "BetMGM"},
-    {"id": "caesars", "display_name": "Caesars"},
-    {"id": "fanatics", "display_name": "Fanatics"},
-]
-
-
-@app.route("/api/books")
-def api_books():
-    """Lists the sportsbooks available to this API key, so the frontend
-    can render a toggle for each one. Falls back to a placeholder list
-    if there's no key yet (mock mode) or the call fails for any reason."""
-    if not SHARPAPI_KEY:
-        return jsonify({"source": "mock", "books": DEFAULT_BOOKS})
-
-    try:
-        headers = {"X-API-Key": SHARPAPI_KEY}
-        resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/sportsbooks", headers=headers, timeout=10)
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
-        books = [{"id": b.get("id"), "display_name": b.get("display_name", b.get("id"))} for b in data if b.get("id")]
-        return jsonify({"source": "live", "books": books or DEFAULT_BOOKS})
-    except Exception as e:
-        return jsonify({"source": "error", "error": str(e), "books": DEFAULT_BOOKS}), 200
-
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-def fetch_events(limit=10):
-    """Gets a list of events to scan. We only pull a handful to stay
-    within the API's per-minute request budget."""
+def fetch_odds_for_book(sportsbook, sport=None, league=None, limit=ODDS_PAGE_LIMIT):
+    """Calls SharpAPI's confirmed-real /odds endpoint for one sportsbook.
+    Response shape (confirmed against a live response): {"data": [{...row}],
+    "pagination": {...}} where each row has event_id, sportsbook,
+    market_type, selection, selection_type, line, odds_decimal,
+    odds_american, is_active, is_player_prop, home_team, away_team,
+    league, etc."""
     headers = {"X-API-Key": SHARPAPI_KEY}
-    resp = requests.get(
-        f"{SHARPAPI_BASE_URL}/api/v1/events",
-        headers=headers,
-        params={"limit": limit},
-        timeout=10,
-    )
+    params = {
+        "sport": sport or DEFAULT_SPORT,
+        "league": league or DEFAULT_LEAGUE,
+        "sportsbook": sportsbook,
+        "limit": limit,
+    }
+    resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/odds", headers=headers, params=params, timeout=10)
     resp.raise_for_status()
     return resp.json().get("data", [])
 
 
-def fetch_event_odds(event_id):
-    """Gets the COMPLETE odds set for one event — every market, every
-    selection, every book. This is what makes arb math trustworthy: partial
-    data (e.g. a paginated dump across many events) can make a market look
-    profitable just because some outcomes are missing from what we pulled."""
-    headers = {"X-API-Key": SHARPAPI_KEY}
-    resp = requests.get(
-        f"{SHARPAPI_BASE_URL}/api/v1/events/{event_id}/odds",
-        headers=headers,
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json().get("data", [])
-
-
-def fetch_all_odds(event_limit=8):
-    """Pulls complete odds for a handful of events (not a broad partial
-    slice) so every market we analyze has its full outcome set."""
-    events = fetch_events(limit=event_limit)
+def fetch_all_odds(books, sport=None, league=None):
+    """Pulls one page of odds per sportsbook and combines them. A book that
+    errors out (bad id, temporary outage) is skipped rather than failing
+    the whole scan."""
     all_rows = []
-    for ev in events:
-        event_id = ev.get("event_id") or ev.get("id")
-        if not event_id:
-            continue
+    for book in books:
         try:
-            all_rows.extend(fetch_event_odds(event_id))
-        except requests.HTTPError:
-            continue  # skip events that error out, keep scanning the rest
+            all_rows.extend(fetch_odds_for_book(book, sport=sport, league=league))
+        except requests.RequestException:
+            continue
     return all_rows
 
 
 def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
-    """Groups odds by market_id (a specific market+line), takes the best
-    price per selection across whichever books cover it, and flags markets
-    where the combined implied probability is under 100% (an arbitrage).
+    """Groups odds rows into markets and flags any where the best price per
+    outcome, taken across whichever books cover it, has a combined implied
+    probability under 100% (an arbitrage).
 
-    Only markets with exactly 2 or 3 outcomes are considered (moneylines,
-    spreads, totals) — high-outcome markets like 'correct score' are far
-    more likely to look falsely profitable if even one selection is missing
-    from what we pulled. Rows missing the fields this needs are skipped
-    rather than allowed to crash the whole scan.
+    Grouping key is (event_id, market_type, |line|) — NOT market_id, which
+    is sportsbook-specific (DraftKings and FanDuel each mint their own
+    market_id for the identical real-world bet, so grouping by it would
+    never find a cross-book match). event_id/market_type/line are the
+    fields that stay consistent across books for the same bet. The line is
+    compared by absolute value because spread markets store it with
+    opposite signs per side (home -0.5 / away +0.5 for the same market).
+
+    Player-prop markets are skipped entirely: market_type alone doesn't
+    say WHICH player a row is about (two different players' passing-yards
+    props share the same market_type), and matching that reliably would
+    mean parsing player names out of free-text selection strings — too
+    fragile to trust with real money.
     """
     allowed_books = {_normalize_book(b) for b in books.split(",")} if books else None
 
@@ -227,29 +210,37 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     for row in rows:
         if not row.get("is_active", True):
             continue
+        if row.get("is_player_prop"):
+            continue
         if not isinstance(row.get("odds_decimal"), (int, float)) or row["odds_decimal"] <= 1:
-            continue  # unusable/missing price, can't factor into implied probability
+            continue
         if allowed_books and _normalize_book(row.get("sportsbook")) not in allowed_books:
             continue
-        market_id = row.get("market_id")
-        if not market_id:
+
+        event_id = row.get("event_id")
+        market_type = row.get("market_type")
+        if not event_id or not market_type:
             continue
-        markets.setdefault(market_id, []).append(row)
+
+        line = row.get("line")
+        line_key = abs(line) if isinstance(line, (int, float)) else line
+
+        markets.setdefault((event_id, market_type, line_key), []).append(row)
 
     arbs = []
-    for market_id, entries in markets.items():
-        unique_selection_ids = {e.get("selection_id") or e.get("selection") for e in entries}
-        if len(unique_selection_ids) not in (2, 3):
-            continue  # skip high-outcome markets (correct score, props, etc.)
+    for (event_id, market_type, line_key), entries in markets.items():
+        unique_selection_types = {e.get("selection_type") for e in entries}
+        if len(unique_selection_types) not in (2, 3):
+            continue  # need a clean 2- or 3-way market to form a full hedge
 
         best_by_selection = {}
         for e in entries:
-            sel_id = e.get("selection_id") or e.get("selection")
-            if sel_id not in best_by_selection or e["odds_decimal"] > best_by_selection[sel_id]["odds_decimal"]:
-                best_by_selection[sel_id] = e
+            sel = e.get("selection_type")
+            if sel not in best_by_selection or e["odds_decimal"] > best_by_selection[sel]["odds_decimal"]:
+                best_by_selection[sel] = e
 
         legs = list(best_by_selection.values())
-        if len(legs) < 2 or len(legs) != len(unique_selection_ids):
+        if len(legs) < 2 or len(legs) != len(unique_selection_types):
             continue  # a selection with no usable price means the market isn't fully covered
 
         implied_sum = sum(1.0 / leg["odds_decimal"] for leg in legs)
@@ -263,22 +254,24 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         sample = legs[0]
         away = sample.get("away_team", "")
         home = sample.get("home_team", "")
-        league = (sample.get("league_ref") or {}).get("label", sample.get("league", ""))
-        market_label = (sample.get("market_ref") or {}).get("label", sample.get("market_type", ""))
+        league = sample.get("league", "")
+        market_label = market_type.replace("_", " ").title()
+        if isinstance(line_key, (int, float)):
+            market_label += f" ({line_key:g})"
 
         arb_legs = []
         for leg in legs:
             stake_percent = (1.0 / leg["odds_decimal"]) / implied_sum * 100
             arb_legs.append({
-                "sportsbook": (leg.get("sportsbook_ref") or {}).get("label", leg.get("sportsbook", "")),
+                "sportsbook": _book_display_name(_normalize_book(leg.get("sportsbook", ""))),
                 "selection": leg.get("selection", ""),
                 "odds_american": _format_american_odds(leg.get("odds_american")),
                 "stake_percent": round(stake_percent, 2),
             })
 
         arbs.append({
-            "event_name": f"{away} @ {home}" if away and home else market_id,
-            "league": f"{league} · {market_label}" if league or market_label else "",
+            "event_name": f"{away} @ {home}" if away and home else event_id,
+            "league": f"{league.upper()} · {market_label}" if league else market_label,
             "profit_percent": round(profit_percent, 2),
             "legs": arb_legs,
         })
@@ -287,13 +280,28 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     return arbs
 
 
+@app.route("/api/books")
+def api_books():
+    return jsonify({"source": "live" if SHARPAPI_KEY else "mock", "books": BOOKS})
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
 @app.route("/api/test-odds")
 def api_test_odds():
-    """Temporary route to confirm the API key works at all, using the
-    free-tier /odds endpoint (arbitrage requires Hobby+)."""
+    """Diagnostic route to confirm the API key + sport/league params work
+    at all against the /odds endpoint."""
     headers = {"X-API-Key": SHARPAPI_KEY}
-    resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/odds", headers=headers, timeout=10)
-    return jsonify({"status_code": resp.status_code, "body": resp.text[:500]})
+    params = {
+        "sport": request.args.get("sport", DEFAULT_SPORT),
+        "league": request.args.get("league", DEFAULT_LEAGUE),
+        "sportsbook": request.args.get("sportsbook", "draftkings"),
+    }
+    resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/odds", headers=headers, params=params, timeout=10)
+    return jsonify({"status_code": resp.status_code, "body": resp.text[:800]})
 
 
 @app.route("/api/arbs")
@@ -302,30 +310,34 @@ def api_arbs():
         return jsonify({"source": "mock", "arbs": MOCK_ARBS})
 
     selected_books = request.args.get("books")  # comma-separated, from the toggles
+    sport = request.args.get("sport", DEFAULT_SPORT)
+    league = request.args.get("league", DEFAULT_LEAGUE)
 
-    cache_key = selected_books or SHARPAPI_BOOKS
+    cache_key = (selected_books or SHARPAPI_BOOKS, sport, league)
     cached = _arbs_cache.get(cache_key)
     if cached and time.time() - cached[0] < ARBS_CACHE_TTL_SECONDS:
         return jsonify(cached[1])
 
+    arbs = None
+    mode = None
     try:
         arbs = fetch_arbs_paid(books=selected_books)
-        payload = {"source": "live", "mode": "paid_endpoint", "arbs": arbs}
-        _arbs_cache[cache_key] = (time.time(), payload)
-        return jsonify(payload)
-    except TierRestrictedError:
-        pass  # not on Hobby+ yet — fall back to the free-tier custom scan below
-    except Exception as e:
-        return jsonify({"source": "error", "error": str(e), "arbs": MOCK_ARBS}), 200
+        mode = "paid_endpoint"
+    except Exception:
+        pass  # endpoint may not exist on this plan/product at all — fall back below
 
-    try:
-        rows = fetch_all_odds()
-        arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=selected_books)
-        payload = {"source": "live", "mode": "free_tier_custom_scan", "arbs": arbs, "rows_scanned": len(rows)}
-        _arbs_cache[cache_key] = (time.time(), payload)
-        return jsonify(payload)
-    except Exception as e:
-        return jsonify({"source": "error", "error": str(e), "arbs": MOCK_ARBS}), 200
+    if arbs is None:
+        try:
+            books_list = (selected_books or SHARPAPI_BOOKS).split(",")
+            rows = fetch_all_odds(books_list, sport=sport, league=league)
+            arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=selected_books)
+            mode = "odds_scan"
+        except Exception as e:
+            return jsonify({"source": "error", "error": str(e), "arbs": MOCK_ARBS}), 200
+
+    payload = {"source": "live", "mode": mode, "arbs": arbs}
+    _arbs_cache[cache_key] = (time.time(), payload)
+    return jsonify(payload)
 
 
 if __name__ == "__main__":
