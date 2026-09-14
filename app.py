@@ -15,7 +15,7 @@ SHARPAPI_BASE_URL = os.environ.get("SHARPAPI_BASE_URL", "https://api.sharpapi.io
 # response from SharpAPI's own playground).
 SHARPAPI_BOOKS = os.environ.get(
     "SHARPAPI_BOOKS",
-    "draftkings,fanduel,betmgm,caesars,fanatics",
+    "betrivers,fanduel,betmgm,draftkings,betano",
 )
 
 # SharpAPI's /odds endpoint requires a sport+league pair. Override per
@@ -45,8 +45,8 @@ BOOK_DISPLAY_NAMES = {
     "draftkings": "DraftKings",
     "fanduel": "FanDuel",
     "betmgm": "BetMGM",
-    "caesars": "Caesars",
-    "fanatics": "Fanatics",
+    "betrivers": "BetRivers",
+    "betano": "Betano",
 }
 
 
@@ -73,12 +73,12 @@ MOCK_ARBS = [
         ],
     },
     {
-        "event_name": "Chiefs vs Bills",
+        "event_name": "Chiefs vs Broncos",
         "league": "NFL",
         "profit_percent": 1.8,
         "legs": [
             {"sportsbook": "BetMGM", "selection": "Chiefs -2.5", "odds_american": "+105", "stake_percent": 49.0},
-            {"sportsbook": "Caesars", "selection": "Bills +2.5", "odds_american": "-105", "stake_percent": 51.0},
+            {"sportsbook": "BetRivers", "selection": "Broncos +2.5", "odds_american": "-105", "stake_percent": 51.0},
         ],
     },
 ]
