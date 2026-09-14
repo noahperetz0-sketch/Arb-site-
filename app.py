@@ -236,6 +236,36 @@ def fetch_all_odds_for_sports(books, sports, league=None):
     return all_rows
 
 
+def _canonical_line(row):
+    """Normalizes a spread row's line to be relative to the HOME team,
+    regardless of which side (home or away) this particular row represents.
+
+    Why this matters: two books can each list their own team as the
+    favorite for the same real-world market segment (e.g. DraftKings has
+    the home team -0.5, BetMGM independently has the away team -0.5 for
+    the same 1st-quarter spread) - both are "my team wins outright" bets,
+    not true complements of each other. If the segment ties, NEITHER
+    "-0.5, must win outright" bet cashes, so pairing them as if they hedge
+    each other is wrong and can show a large fake "arb" on exactly the kind
+    of low-sample, high-disagreement market (1st quarter/half segments)
+    where books are most likely to differ on who's favored.
+
+    Within one self-consistent single-book market, home_line == -away_line
+    always holds, so negating an away-side row's line converts it to what
+    the home team's line would be if this book agreed with itself the
+    normal way. Two rows can only be true complements of the same
+    underlying proposition if this canonical value matches exactly -
+    matching on raw magnitude alone (the old approach) can't tell two
+    books' conflicting "who's favored" opinions apart.
+
+    Rows with no numeric line (moneylines) or no team framing (totals,
+    over/under share the same line already) pass through unchanged."""
+    line = row.get("line")
+    if not isinstance(line, (int, float)):
+        return line
+    return -line if row.get("team_side") == "away" else line
+
+
 def _legs_form_valid_arb(legs):
     """The non-negotiable rules for what is allowed to be shown as an
     arbitrage opportunity on this site. This tool is arbitrage-only - every
@@ -247,9 +277,11 @@ def _legs_form_valid_arb(legs):
        Two prices from the same book are not a hedge (the book will notice
        and can void/limit it), and shouldn't even be possible to observe as
        profitable under normal pricing.
-    2. Every leg must be the same event, same market, same players/teams -
-       enforced upstream by the (event_id, market_type, |line|) grouping
-       key this is only ever called against, never by this function itself.
+    2. Every leg must be the same event, same market, same players/teams,
+       and truly complementary sides of the SAME line (not just matching
+       magnitude - see _canonical_line) - all enforced upstream by the
+       (event_id, market_type, canonical_line) grouping key this is only
+       ever called against, never by this function itself.
        (A market with mixed players, e.g. two different WNBA players'
        point props sharing a market_type, must be excluded from the row
        data before it ever reaches grouping - see the "player" checks in
@@ -267,13 +299,18 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     outcome, taken across whichever books cover it, has a combined implied
     probability under 100% (an arbitrage).
 
-    Grouping key is (event_id, market_type, |line|) — NOT market_id, which
-    is sportsbook-specific (DraftKings and FanDuel each mint their own
+    Grouping key is (event_id, market_type, canonical_line) — NOT market_id,
+    which is sportsbook-specific (DraftKings and FanDuel each mint their own
     market_id for the identical real-world bet, so grouping by it would
-    never find a cross-book match). event_id/market_type/line are the
-    fields that stay consistent across books for the same bet. The line is
-    compared by absolute value because spread markets store it with
-    opposite signs per side (home -0.5 / away +0.5 for the same market).
+    never find a cross-book match). event_id/market_type are the fields
+    that stay consistent across books for the same bet; the line is run
+    through _canonical_line() rather than compared directly or by raw
+    magnitude, because two books can each favor a DIFFERENT team for the
+    same market (DraftKings has the home team -0.5, BetMGM independently
+    has the away team -0.5) - matching by magnitude alone would pair two
+    books' conflicting "my team is favored" bets as if they were opposite,
+    complementary sides of one market, when they aren't (if the segment
+    ties, neither actually wins). See _canonical_line()'s docstring.
 
     Player-prop markets are skipped entirely: market_type alone doesn't
     say WHICH player a row is about (two different players' passing-yards
@@ -317,8 +354,7 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         if not event_id or not market_type:
             continue
 
-        line = row.get("line")
-        line_key = abs(line) if isinstance(line, (int, float)) else line
+        line_key = _canonical_line(row)
 
         markets.setdefault((event_id, market_type, line_key), []).append(row)
 
