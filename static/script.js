@@ -5,22 +5,88 @@ const statusEl = document.getElementById("status");
 const booksPanelEl = document.getElementById("booksPanel");
 const toggleAllBtn = document.getElementById("toggleAllBtn");
 const autoRefreshCheckbox = document.getElementById("autoRefresh");
-const sportPresetSelect = document.getElementById("sportPreset");
-const customSportFieldsEl = document.getElementById("customSportFields");
-const customSportInput = document.getElementById("customSport");
-const customLeagueInput = document.getElementById("customLeague");
-const applyCustomSportBtn = document.getElementById("applyCustomSportBtn");
+const sportSelectEl = document.getElementById("sportSelect");
+const leagueSelectEl = document.getElementById("leagueSelect");
+const sportLeagueNoteEl = document.getElementById("sportLeagueNote");
 const liveFilterSelect = document.getElementById("liveFilter");
 
 const AUTO_REFRESH_INTERVAL_MS = 30000;
+const PREFERRED_DEFAULT_SPORT = "football";
+const PREFERRED_DEFAULT_LEAGUE = "nfl";
 
 let currentArbs = [];
 let allBooks = [];          // [{id, display_name}, ...]
 let selectedBookIds = new Set();
 let isLoading = false;
 let autoRefreshTimer = null;
-let currentSport = "football";
-let currentLeague = "nfl";
+let currentSport = "";
+let currentLeague = "";
+
+function showSportLeagueNote(text) {
+  if (!text) {
+    sportLeagueNoteEl.hidden = true;
+    return;
+  }
+  sportLeagueNoteEl.textContent = text;
+  sportLeagueNoteEl.hidden = false;
+}
+
+async function loadSports() {
+  try {
+    const res = await fetch("/api/sports");
+    const data = await res.json();
+    const sports = data.sports || [];
+    sportSelectEl.innerHTML = sports.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+
+    if (data.source === "error") {
+      showSportLeagueNote(`Couldn't reach SharpAPI's sports list (${data.error}) — showing a short fallback list instead.`);
+    }
+
+    const preferred = sports.find((s) => s.id === PREFERRED_DEFAULT_SPORT);
+    currentSport = preferred ? preferred.id : (sports[0] ? sports[0].id : "");
+    sportSelectEl.value = currentSport;
+  } catch (err) {
+    console.error("Failed to load sports:", err);
+    showSportLeagueNote("Couldn't load the sports list. Try refreshing the page.");
+  }
+}
+
+async function loadLeagues(sport) {
+  leagueSelectEl.innerHTML = `<option value="">Loading leagues…</option>`;
+  try {
+    const res = await fetch(`/api/leagues?sport=${encodeURIComponent(sport)}`);
+    const data = await res.json();
+    const leagues = data.leagues || [];
+
+    if (!leagues.length) {
+      leagueSelectEl.innerHTML = `<option value="">No leagues found for this sport</option>`;
+      currentLeague = "";
+      showSportLeagueNote(
+        data.source === "error"
+          ? `Couldn't reach SharpAPI's leagues list (${data.error}).`
+          : "SharpAPI didn't return any leagues for this sport."
+      );
+      return;
+    }
+
+    leagueSelectEl.innerHTML = leagues.map((l) => `<option value="${l.id}">${l.name}</option>`).join("");
+
+    if (data.source === "error") {
+      showSportLeagueNote(`Couldn't reach SharpAPI's leagues list (${data.error}) — showing a fallback instead.`);
+    } else {
+      showSportLeagueNote(null);
+    }
+
+    const preferred = sport === PREFERRED_DEFAULT_SPORT ? leagues.find((l) => l.id === PREFERRED_DEFAULT_LEAGUE) : null;
+    currentLeague = preferred ? preferred.id : leagues[0].id;
+    leagueSelectEl.value = currentLeague;
+  } catch (err) {
+    console.error("Failed to load leagues:", err);
+    leagueSelectEl.innerHTML = `<option value="">Failed to load leagues</option>`;
+    currentLeague = "";
+    showSportLeagueNote("Couldn't load the leagues list. Try refreshing the page.");
+  }
+}
 
 async function loadBooks() {
   try {
@@ -86,6 +152,8 @@ toggleAllBtn.addEventListener("click", () => {
 async function loadArbs() {
   if (isLoading) return; // don't stack overlapping requests (manual click + auto-refresh + toggle spam)
 
+  if (!currentSport || !currentLeague) return; // sports/leagues haven't finished loading yet
+
   if (selectedBookIds.size === 0) {
     statusEl.textContent = "No sportsbooks selected — toggle at least one on to scan.";
     statusEl.classList.remove("is-loading");
@@ -116,6 +184,8 @@ async function loadArbs() {
       statusEl.textContent = "Showing sample data — add your SharpAPI key to see live arbs.";
     } else if (data.source === "error") {
       statusEl.textContent = `Couldn't reach SharpAPI (${data.error}). Showing sample data instead.`;
+    } else if (data.rows_scanned === 0) {
+      statusEl.textContent = "SharpAPI returned no odds at all for this sport/league/book combination right now — try a different sport, league, or fewer restrictive book toggles.";
     } else {
       const shown = getFilteredArbs().length;
       statusEl.textContent = `Live data · ${shown} opportunit${shown === 1 ? "y" : "ies"} shown · updated ${new Date().toLocaleTimeString()}`;
@@ -236,30 +306,15 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-function setSportLeague(sport, league) {
-  currentSport = sport;
-  currentLeague = league;
+sportSelectEl.addEventListener("change", async () => {
+  currentSport = sportSelectEl.value;
+  await loadLeagues(currentSport);
   loadArbs();
-}
-
-sportPresetSelect.addEventListener("change", () => {
-  const value = sportPresetSelect.value;
-  if (value === "custom") {
-    customSportInput.value = currentSport;
-    customLeagueInput.value = currentLeague;
-    customSportFieldsEl.hidden = false;
-    return;
-  }
-  customSportFieldsEl.hidden = true;
-  const [sport, league] = value.split(":");
-  setSportLeague(sport, league);
 });
 
-applyCustomSportBtn.addEventListener("click", () => {
-  const sport = customSportInput.value.trim().toLowerCase();
-  const league = customLeagueInput.value.trim().toLowerCase();
-  if (!sport || !league) return;
-  setSportLeague(sport, league);
+leagueSelectEl.addEventListener("change", () => {
+  currentLeague = leagueSelectEl.value;
+  if (currentLeague) loadArbs();
 });
 
 liveFilterSelect.addEventListener("change", () => {
@@ -273,8 +328,10 @@ liveFilterSelect.addEventListener("change", () => {
 refreshBtn.addEventListener("click", loadArbs);
 totalStakeInput.addEventListener("input", renderArbs);
 
-// Initial load: get available books first, then load arbs
-loadBooks().then(() => {
+// Initial load: get books and sports in parallel, then leagues for the
+// default sport, then the first arb scan.
+Promise.all([loadBooks(), loadSports()]).then(async () => {
+  if (currentSport) await loadLeagues(currentSport);
   loadArbs();
   if (autoRefreshCheckbox.checked) startAutoRefresh();
 });

@@ -41,6 +41,25 @@ ODDS_PAGE_LIMIT = 200
 ARBS_CACHE_TTL_SECONDS = 8
 _arbs_cache = {}  # cache key -> (timestamp, response_dict)
 
+# Sports/leagues change rarely, so this cache lives much longer.
+SPORTS_CACHE_TTL_SECONDS = 3600
+_sports_cache = None  # (timestamp, [{"id","name"}])
+_leagues_cache = {}  # sport -> (timestamp, [{"id","name"}])
+
+# Only used if SharpAPI's /sports or /leagues endpoints don't exist or fail -
+# a minimal, honest fallback built only from sport/league ids we've directly
+# confirmed against real API responses, not guessed.
+FALLBACK_SPORTS = [
+    {"id": "football", "name": "Football"},
+    {"id": "basketball", "name": "Basketball"},
+    {"id": "soccer", "name": "Soccer"},
+    {"id": "tennis", "name": "Tennis"},
+    {"id": "esports", "name": "Esports"},
+]
+FALLBACK_LEAGUES = {
+    "football": [{"id": "nfl", "name": "NFL"}],
+}
+
 BOOK_DISPLAY_NAMES = {
     "draftkings": "DraftKings",
     "fanduel": "FanDuel",
@@ -292,6 +311,80 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     return arbs
 
 
+def fetch_sports():
+    """Calls SharpAPI's sports-list endpoint. Not yet confirmed against a
+    real response (unlike /odds) - inferred from the official Python SDK's
+    documented client.sports.list() method plus the {"data": [...]} wrapper
+    and id/name field convention every other confirmed endpoint uses
+    (matches the sport_ref shape seen embedded in real /odds rows, e.g.
+    {"id": "football", "name": "Football", "numerical_id": 12})."""
+    headers = {"X-API-Key": SHARPAPI_KEY}
+    resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/sports", headers=headers, timeout=10)
+    resp.raise_for_status()
+    data = resp.json().get("data", [])
+    return [
+        {"id": s.get("id"), "name": s.get("name") or s.get("label") or s.get("id")}
+        for s in data
+        if s.get("id")
+    ]
+
+
+def fetch_leagues(sport):
+    """Calls SharpAPI's leagues-list endpoint for one sport. Same
+    confirmation caveat as fetch_sports() - inferred from the SDK's
+    client.leagues.list(sport) plus the league_ref shape seen in real /odds
+    rows, e.g. {"id": "nfl", "label": "NFL", "numerical_id": 376}."""
+    headers = {"X-API-Key": SHARPAPI_KEY}
+    resp = requests.get(
+        f"{SHARPAPI_BASE_URL}/api/v1/leagues", headers=headers, params={"sport": sport}, timeout=10
+    )
+    resp.raise_for_status()
+    data = resp.json().get("data", [])
+    return [
+        {"id": l.get("id"), "name": l.get("label") or l.get("name") or l.get("id")}
+        for l in data
+        if l.get("id")
+    ]
+
+
+@app.route("/api/sports")
+def api_sports():
+    global _sports_cache
+    if not SHARPAPI_KEY:
+        return jsonify({"source": "mock", "sports": FALLBACK_SPORTS})
+
+    if _sports_cache and time.time() - _sports_cache[0] < SPORTS_CACHE_TTL_SECONDS:
+        return jsonify({"source": "live", "sports": _sports_cache[1]})
+
+    try:
+        sports = fetch_sports()
+        _sports_cache = (time.time(), sports)
+        return jsonify({"source": "live", "sports": sports})
+    except Exception as e:
+        return jsonify({"source": "error", "error": str(e), "sports": FALLBACK_SPORTS}), 200
+
+
+@app.route("/api/leagues")
+def api_leagues():
+    sport = request.args.get("sport", "")
+    if not sport:
+        return jsonify({"source": "error", "error": "missing sport param", "leagues": []}), 200
+
+    if not SHARPAPI_KEY:
+        return jsonify({"source": "mock", "leagues": FALLBACK_LEAGUES.get(sport, [])})
+
+    cached = _leagues_cache.get(sport)
+    if cached and time.time() - cached[0] < SPORTS_CACHE_TTL_SECONDS:
+        return jsonify({"source": "live", "leagues": cached[1]})
+
+    try:
+        leagues = fetch_leagues(sport)
+        _leagues_cache[sport] = (time.time(), leagues)
+        return jsonify({"source": "live", "leagues": leagues})
+    except Exception as e:
+        return jsonify({"source": "error", "error": str(e), "leagues": FALLBACK_LEAGUES.get(sport, [])}), 200
+
+
 @app.route("/api/books")
 def api_books():
     return jsonify({"source": "live" if SHARPAPI_KEY else "mock", "books": BOOKS})
@@ -332,6 +425,7 @@ def api_arbs():
 
     arbs = None
     mode = None
+    rows_scanned = None
     try:
         arbs = fetch_arbs_paid(books=selected_books)
         mode = "paid_endpoint"
@@ -342,12 +436,17 @@ def api_arbs():
         try:
             resolved_books = selected_books or SHARPAPI_BOOKS
             rows = fetch_all_odds(resolved_books.split(","), sport=sport, league=league)
+            rows_scanned = len(rows)
             arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=resolved_books)
             mode = "odds_scan"
         except Exception as e:
             return jsonify({"source": "error", "error": str(e), "arbs": MOCK_ARBS}), 200
 
-    payload = {"source": "live", "mode": mode, "arbs": arbs}
+    # rows_scanned=0 on an odds_scan means SharpAPI returned nothing at all
+    # for this sport/league/book combination (worth investigating) - as
+    # opposed to rows_scanned>0 with zero arbs, which just means real prices
+    # were found but none of them crossed into arbitrage territory (normal).
+    payload = {"source": "live", "mode": mode, "rows_scanned": rows_scanned, "arbs": arbs}
     _arbs_cache[cache_key] = (time.time(), payload)
     return jsonify(payload)
 

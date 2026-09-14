@@ -137,25 +137,11 @@ button#refreshBtn:disabled {
   border-color: var(--accent);
 }
 
-.custom-sport-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.custom-sport-fields input[type="text"] {
-  width: 140px;
-}
-
-.custom-sport-fields button {
-  padding: 8px 14px;
-  background: var(--accent);
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-weight: 600;
-  font-size: 13px;
-  cursor: pointer;
+.sport-league-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: -8px;
+  margin-bottom: 16px;
 }
 
 .books-header {
