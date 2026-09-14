@@ -8,6 +8,7 @@ const autoRefreshCheckbox = document.getElementById("autoRefresh");
 const sportSelectEl = document.getElementById("sportSelect");
 const leagueSelectEl = document.getElementById("leagueSelect");
 const sportLeagueNoteEl = document.getElementById("sportLeagueNote");
+const scanScopeNoteEl = document.getElementById("scanScopeNote");
 const liveFilterSelect = document.getElementById("liveFilter");
 
 const AUTO_REFRESH_INTERVAL_MS = 30000;
@@ -36,40 +37,46 @@ async function loadSports() {
     const res = await fetch("/api/sports");
     const data = await res.json();
     const sports = data.sports || [];
-    sportSelectEl.innerHTML = sports.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+    const options = [{ id: "all", name: "All Sports" }, ...sports];
+    sportSelectEl.innerHTML = options.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
 
     if (data.source === "error") {
       showSportLeagueNote(`Couldn't reach SharpAPI's sports list (${data.error}) — showing a short fallback list instead.`);
     }
 
     const preferred = sports.find((s) => s.id === PREFERRED_DEFAULT_SPORT);
-    currentSport = preferred ? preferred.id : (sports[0] ? sports[0].id : "");
+    currentSport = preferred ? preferred.id : (sports[0] ? sports[0].id : "all");
     sportSelectEl.value = currentSport;
   } catch (err) {
     console.error("Failed to load sports:", err);
-    showSportLeagueNote("Couldn't load the sports list. Try refreshing the page.");
+    sportSelectEl.innerHTML = `<option value="all">All Sports</option>`;
+    currentSport = "all";
+    showSportLeagueNote('Couldn\'t load the sports list — defaulting to "All Sports".');
   }
 }
 
+// "All Leagues" is always offered, even if the specific-leagues fetch below
+// fails or comes back empty — it just omits the league filter server-side,
+// so it doesn't depend on knowing real league ids in advance.
 async function loadLeagues(sport) {
   leagueSelectEl.innerHTML = `<option value="">Loading leagues…</option>`;
   try {
     const res = await fetch(`/api/leagues?sport=${encodeURIComponent(sport)}`);
     const data = await res.json();
     const leagues = data.leagues || [];
+    const options = [{ id: "all", name: "All Leagues" }, ...leagues];
+    leagueSelectEl.innerHTML = options.map((l) => `<option value="${l.id}">${l.name}</option>`).join("");
 
     if (!leagues.length) {
-      leagueSelectEl.innerHTML = `<option value="">No leagues found for this sport</option>`;
-      currentLeague = "";
+      currentLeague = "all";
+      leagueSelectEl.value = "all";
       showSportLeagueNote(
         data.source === "error"
-          ? `Couldn't reach SharpAPI's leagues list (${data.error}).`
-          : "SharpAPI didn't return any leagues for this sport."
+          ? `Couldn't reach SharpAPI's leagues list (${data.error}) — you can still pick "All Leagues" to scan broadly.`
+          : 'SharpAPI didn\'t return any specific leagues for this sport — you can still pick "All Leagues" to scan broadly.'
       );
       return;
     }
-
-    leagueSelectEl.innerHTML = leagues.map((l) => `<option value="${l.id}">${l.name}</option>`).join("");
 
     if (data.source === "error") {
       showSportLeagueNote(`Couldn't reach SharpAPI's leagues list (${data.error}) — showing a fallback instead.`);
@@ -82,9 +89,26 @@ async function loadLeagues(sport) {
     leagueSelectEl.value = currentLeague;
   } catch (err) {
     console.error("Failed to load leagues:", err);
-    leagueSelectEl.innerHTML = `<option value="">Failed to load leagues</option>`;
-    currentLeague = "";
-    showSportLeagueNote("Couldn't load the leagues list. Try refreshing the page.");
+    leagueSelectEl.innerHTML = `<option value="all">All Leagues</option>`;
+    currentLeague = "all";
+    showSportLeagueNote('Couldn\'t load the specific leagues list — you can still pick "All Leagues" to scan broadly.');
+  }
+}
+
+function updateScanScopeState() {
+  const heavy = currentSport === "all" || currentLeague === "all";
+  if (heavy) {
+    const scope = currentSport === "all"
+      ? "every sport"
+      : `all leagues in ${sportSelectEl.options[sportSelectEl.selectedIndex] ? sportSelectEl.options[sportSelectEl.selectedIndex].text : currentSport}`;
+    scanScopeNoteEl.textContent = `Scanning ${scope} means a lot more API requests per refresh — auto-refresh has been turned off so this doesn't run automatically every 30 seconds. Use the Refresh button when you want to re-scan.`;
+    scanScopeNoteEl.hidden = false;
+    autoRefreshCheckbox.checked = false;
+    autoRefreshCheckbox.disabled = true;
+    stopAutoRefresh();
+  } else {
+    scanScopeNoteEl.hidden = true;
+    autoRefreshCheckbox.disabled = false;
   }
 }
 
@@ -308,12 +332,25 @@ document.addEventListener("visibilitychange", () => {
 
 sportSelectEl.addEventListener("change", async () => {
   currentSport = sportSelectEl.value;
-  await loadLeagues(currentSport);
+  if (currentSport === "all") {
+    // No single sport means no single league either - scanning "all sports"
+    // already implies every league within each of them.
+    leagueSelectEl.innerHTML = `<option value="all">All Leagues</option>`;
+    leagueSelectEl.value = "all";
+    leagueSelectEl.disabled = true;
+    currentLeague = "all";
+    showSportLeagueNote(null);
+  } else {
+    leagueSelectEl.disabled = false;
+    await loadLeagues(currentSport);
+  }
+  updateScanScopeState();
   loadArbs();
 });
 
 leagueSelectEl.addEventListener("change", () => {
   currentLeague = leagueSelectEl.value;
+  updateScanScopeState();
   if (currentLeague) loadArbs();
 });
 
@@ -331,7 +368,8 @@ totalStakeInput.addEventListener("input", renderArbs);
 // Initial load: get books and sports in parallel, then leagues for the
 // default sport, then the first arb scan.
 Promise.all([loadBooks(), loadSports()]).then(async () => {
-  if (currentSport) await loadLeagues(currentSport);
+  if (currentSport && currentSport !== "all") await loadLeagues(currentSport);
+  updateScanScopeState();
   loadArbs();
   if (autoRefreshCheckbox.checked) startAutoRefresh();
 });

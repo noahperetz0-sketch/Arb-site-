@@ -178,35 +178,47 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
     return arbs
 
 
-def fetch_odds_for_book(sportsbook, sport=None, league=None, limit=ODDS_PAGE_LIMIT):
+def fetch_odds_for_book(sportsbook, sport, league=None, limit=ODDS_PAGE_LIMIT):
     """Calls SharpAPI's confirmed-real /odds endpoint for one sportsbook.
     Response shape (confirmed against a live response): {"data": [{...row}],
     "pagination": {...}} where each row has event_id, sportsbook,
     market_type, selection, selection_type, line, odds_decimal,
     odds_american, is_active, is_player_prop, home_team, away_team,
-    league, etc."""
+    league, etc.
+
+    league=None omits the league filter entirely (all leagues for this
+    sport) rather than falling back to a default - callers that want a
+    specific league must pass one explicitly."""
     headers = {"X-API-Key": SHARPAPI_KEY}
-    params = {
-        "sport": sport or DEFAULT_SPORT,
-        "league": league or DEFAULT_LEAGUE,
-        "sportsbook": sportsbook,
-        "limit": limit,
-    }
+    params = {"sport": sport, "sportsbook": sportsbook, "limit": limit}
+    if league:
+        params["league"] = league
     resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/odds", headers=headers, params=params, timeout=10)
     resp.raise_for_status()
     return resp.json().get("data", [])
 
 
-def fetch_all_odds(books, sport=None, league=None):
-    """Pulls one page of odds per sportsbook and combines them. A book that
-    errors out (bad id, temporary outage) is skipped rather than failing
-    the whole scan."""
+def fetch_all_odds(books, sport, league=None):
+    """Pulls one page of odds per sportsbook (for one sport, optionally one
+    league) and combines them. A book that errors out (bad id, temporary
+    outage) is skipped rather than failing the whole scan."""
     all_rows = []
     for book in books:
         try:
             all_rows.extend(fetch_odds_for_book(book, sport=sport, league=league))
         except requests.RequestException:
             continue
+    return all_rows
+
+
+def fetch_all_odds_for_sports(books, sports, league=None):
+    """Loops fetch_all_odds() across every given sport, merging everything
+    into one row list. This is what powers "scan everything" - it multiplies
+    request count by len(sports), so it's meaningfully heavier than a
+    single-sport scan and shouldn't be run on a short auto-refresh timer."""
+    all_rows = []
+    for sport in sports:
+        all_rows.extend(fetch_all_odds(books, sport, league=league))
     return all_rows
 
 
@@ -347,6 +359,22 @@ def fetch_leagues(sport):
     ]
 
 
+def get_cached_sport_ids():
+    """Best-effort sport id list for 'scan everything' mode - shares the
+    same cache /api/sports populates, but never raises; falls back to the
+    fixed list if SharpAPI's sports endpoint isn't reachable, so a "scan
+    everything" request always has something to loop over."""
+    global _sports_cache
+    if _sports_cache and time.time() - _sports_cache[0] < SPORTS_CACHE_TTL_SECONDS:
+        return [s["id"] for s in _sports_cache[1]]
+    try:
+        sports = fetch_sports()
+        _sports_cache = (time.time(), sports)
+        return [s["id"] for s in sports]
+    except Exception:
+        return [s["id"] for s in FALLBACK_SPORTS]
+
+
 @app.route("/api/sports")
 def api_sports():
     global _sports_cache
@@ -417,28 +445,41 @@ def api_arbs():
     selected_books = request.args.get("books")  # comma-separated, from the toggles
     sport = request.args.get("sport", DEFAULT_SPORT)
     league = request.args.get("league", DEFAULT_LEAGUE)
+    scan_all_sports = sport == "all"
+    scan_all_leagues = league == "all"
 
     cache_key = (selected_books or SHARPAPI_BOOKS, sport, league)
     cached = _arbs_cache.get(cache_key)
     if cached and time.time() - cached[0] < ARBS_CACHE_TTL_SECONDS:
         return jsonify(cached[1])
 
+    resolved_books = (selected_books or SHARPAPI_BOOKS).split(",")
+
     arbs = None
     mode = None
     rows_scanned = None
-    try:
-        arbs = fetch_arbs_paid(books=selected_books)
-        mode = "paid_endpoint"
-    except Exception:
-        pass  # endpoint may not exist on this plan/product at all — fall back below
+
+    # The pre-computed arbitrage endpoint (if it exists at all) only makes
+    # sense for one sport/league at a time, so "scan everything" always
+    # goes straight to the odds-scan path below.
+    if not scan_all_sports and not scan_all_leagues:
+        try:
+            arbs = fetch_arbs_paid(books=selected_books)
+            mode = "paid_endpoint"
+        except Exception:
+            pass  # endpoint may not exist on this plan/product at all — fall back below
 
     if arbs is None:
         try:
-            resolved_books = selected_books or SHARPAPI_BOOKS
-            rows = fetch_all_odds(resolved_books.split(","), sport=sport, league=league)
+            if scan_all_sports:
+                sports_to_scan = get_cached_sport_ids()
+                rows = fetch_all_odds_for_sports(resolved_books, sports_to_scan, league=None)
+                mode = "odds_scan_all_sports"
+            else:
+                rows = fetch_all_odds(resolved_books, sport, league=None if scan_all_leagues else league)
+                mode = "odds_scan"
             rows_scanned = len(rows)
-            arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=resolved_books)
-            mode = "odds_scan"
+            arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=",".join(resolved_books))
         except Exception as e:
             return jsonify({"source": "error", "error": str(e), "arbs": MOCK_ARBS}), 200
 

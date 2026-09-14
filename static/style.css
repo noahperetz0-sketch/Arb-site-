@@ -144,6 +144,11 @@ button#refreshBtn:disabled {
   margin-bottom: 16px;
 }
 
+.sport-panel select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .books-header {
   display: flex;
   align-items: center;
