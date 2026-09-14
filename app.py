@@ -40,12 +40,18 @@ MAX_SANE_PROFIT_PERCENT = 25.0
 # "timestamp" field since no equivalent live-staleness flag exists.
 MAX_LIVE_ROW_AGE_SECONDS = 10
 
-# Confirmed rate limit: 150 requests/minute. A single-sport scan (one
+# Confirmed per SharpAPI's own docs (Tier Comparison / Subscription Tiers
+# tables): Free 12 req/min, Hobby 120, Pro 300, Sharp 1,000, Enterprise
+# custom. This site's plan is Hobby, hence 120 - previously set to a
+# guessed 150 before these docs were available. A single-sport scan (one
 # request per selected book) stays cheap; "all sports"/"all leagues" scans
 # multiply that by however many sports get looped over and can burn a big
 # chunk of the budget in one call (the frontend disables auto-refresh in
-# that mode for exactly this reason).
-SHARPAPI_RATE_LIMIT_PER_MINUTE = 150
+# that mode for exactly this reason). The real per-response rate-limit
+# headers (X-RateLimit-Limit/-Remaining/-Reset) aren't read by this app -
+# this constant is just used for the auto-refresh cadence comment/UI math
+# below, not for any actual backoff logic.
+SHARPAPI_RATE_LIMIT_PER_MINUTE = 120
 
 # Rows returned per sportsbook per scan. We only read the first page per
 # book rather than following pagination — a single event's markets alone
@@ -161,11 +167,62 @@ def _book_display_name(book_id):
     return entry["display_name"] if entry else book_id.title()
 
 
+_sportsbooks_cache = None  # (timestamp, [{"id","display_name","tier"}])
+
+
+def fetch_sportsbooks():
+    """Calls SharpAPI's sportsbooks-list endpoint - confirmed real per
+    SharpAPI's own docs (GET /api/v1/sportsbooks, Free tier, also a public
+    reference endpoint reachable unauthenticated at 10 req/min) and against
+    a real response (fields: id, display_name, short_name, category,
+    requires_tier, status, coming_soon, event_count, ...). Used so a
+    brand-new book SharpAPI adds shows up as a toggle automatically,
+    without SPORTSBOOK_CATALOG (the static fallback below) needing to be
+    hand-updated and redeployed."""
+    headers = {"X-API-Key": SHARPAPI_KEY}
+    resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/sportsbooks", headers=headers, timeout=10)
+    resp.raise_for_status()
+    data = resp.json().get("data", [])
+    books = []
+    for b in data:
+        book_id = b.get("id")
+        if not book_id or b.get("coming_soon"):
+            continue
+        if b.get("status") and b.get("status") != "active":
+            continue
+        books.append({
+            "id": book_id,
+            "display_name": b.get("display_name") or b.get("short_name") or book_id,
+            "tier": b.get("requires_tier"),
+        })
+    return books
+
+
+def get_sportsbook_list():
+    """Live-fetched, cached list of every sportsbook SharpAPI supports -
+    falls back to SPORTSBOOK_CATALOG (the static, hand-transcribed-from-docs
+    list) if the live call fails or no key is set, same graceful-degradation
+    pattern as get_cached_sport_ids(). Cached rather than fetched at import
+    time so a flaky network at startup can't block the app from serving."""
+    global _sportsbooks_cache
+    if not SHARPAPI_KEY:
+        return SPORTSBOOK_CATALOG
+    if _sportsbooks_cache and time.time() - _sportsbooks_cache[0] < SPORTS_CACHE_TTL_SECONDS:
+        return _sportsbooks_cache[1]
+    try:
+        books = fetch_sportsbooks()
+        _sportsbooks_cache = (time.time(), books)
+        return books
+    except Exception:
+        return SPORTSBOOK_CATALOG
+
+
 def _book_catalog():
     """Every sportsbook toggle offered in the UI: the plan-configured books
     from SHARPAPI_BOOKS first (confirmed real, checked by default), then
-    every other book in SPORTSBOOK_CATALOG - SharpAPI's full documented
-    list - unchecked by default. A catalog id already covered by
+    every other book from get_sportsbook_list() - SharpAPI's live
+    sportsbooks list when reachable, else the static SPORTSBOOK_CATALOG
+    fallback - unchecked by default. A catalog id already covered by
     SHARPAPI_BOOKS is skipped to avoid listing it twice."""
     plan_books = [b.strip() for b in SHARPAPI_BOOKS.split(",") if b.strip()]
     plan_ids = {_normalize_book(b) for b in plan_books}
@@ -174,19 +231,16 @@ def _book_catalog():
         {"id": b, "display_name": _book_display_name(b), "tier": None, "preselected": True}
         for b in plan_books
     ]
-    for b in SPORTSBOOK_CATALOG:
+    for b in get_sportsbook_list():
         if _normalize_book(b["id"]) in plan_ids:
             continue
         catalog.append({
             "id": b["id"],
-            "display_name": b["display_name"],
+            "display_name": b.get("display_name") or _book_display_name(b["id"]),
             "tier": b.get("tier"),
             "preselected": False,
         })
     return catalog
-
-
-BOOKS = _book_catalog()
 
 # Mock data used only when no API key is set, so the site is viewable
 # immediately without any setup. Once SHARPAPI_KEY is set, real data is used.
@@ -223,13 +277,23 @@ def _format_american_odds(value):
 
 
 def fetch_arbs_paid(min_profit=0.5, books=None):
-    """Attempts SharpAPI's pre-computed arbitrage endpoint, IF your plan
-    actually has it. As of testing, no "Opportunities"/"Arbitrage" tab shows
-    up anywhere in SharpAPI's own playground (only Odds/Events/Game State),
-    so this may simply not exist as a real, callable endpoint — treat it as
-    a bonus attempt. api_arbs() below falls back to compute_arbs_from_odds()
-    (built from the confirmed-real /odds endpoint) if this fails for any
-    reason at all, not just a 403."""
+    """Calls SharpAPI's pre-computed arbitrage endpoint - confirmed real per
+    SharpAPI's own docs (GET /api/v1/opportunities/arbitrage, Hobby tier or
+    higher required; this site's plan is Hobby, so it should be reachable).
+    Un-namespaced paths like /api/v1/arbitrage are a documented 410 Gone
+    with a correct_endpoint pointer, which is why we've always used the
+    /opportunities/ prefix here.
+
+    The exact query params and response fields for THIS SPECIFIC endpoint
+    are still not confirmed (the general /odds-family filter docs - sport,
+    league, sportsbook, market, limit, offset, cursor - don't necessarily
+    apply to /opportunities/* the same way, and the general docs don't list
+    a min_profit param at all - it's a guess modeled after the confirmed
+    /opportunities/ev endpoint's own min_ev param). api_arbs() below falls
+    back to compute_arbs_from_odds() (built from the confirmed-real /odds
+    endpoint, with every field this app relies on directly confirmed) if
+    this fails for any reason - including a wrong/unrecognized param name
+    silently returning nothing or a validation_error, not just a 403."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     params = {"min_profit": min_profit, "sportsbook": books or SHARPAPI_BOOKS}
     resp = requests.get(
@@ -284,11 +348,21 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
 
 def fetch_odds_for_book(sportsbook, sport, league=None, limit=ODDS_PAGE_LIMIT):
     """Calls SharpAPI's confirmed-real /odds endpoint for one sportsbook.
-    Response shape (confirmed against a live response): {"data": [{...row}],
-    "pagination": {...}} where each row has event_id, sportsbook,
-    market_type, selection, selection_type, line, odds_decimal,
-    odds_american, is_active, is_player_prop, home_team, away_team,
-    league, etc.
+    Response shape per SharpAPI's own "Response Conventions" docs (the
+    paginated-list shape): {"data": [{...row}], "pagination": {...},
+    "updated_at": "..."} - "pagination" is a top-level sibling of "data",
+    not nested under a "meta" key. We only ever read .data, so this shape
+    detail doesn't currently matter functionally, but matters if pagination
+    is ever consumed later. Each row has event_id, sportsbook, market_type,
+    selection, selection_type, line, odds_decimal, odds_american, is_active,
+    is_player_prop, timestamp, home_team, away_team, league, etc.
+
+    ODDS_PAGE_LIMIT (200) matches SharpAPI's documented max for `limit`.
+    We deliberately never page past offset=0 (see ODDS_PAGE_LIMIT's own
+    comment) - also confirmed sane now that offset is documented as capped
+    at 500 on this endpoint anyway (400 offset_too_large beyond that),
+    with cursor-based pagination as the real way to go deeper, which we
+    don't use.
 
     league=None omits the league filter entirely (all leagues for this
     sport) rather than falling back to a default - callers that want a
@@ -302,28 +376,62 @@ def fetch_odds_for_book(sportsbook, sport, league=None, limit=ODDS_PAGE_LIMIT):
     return resp.json().get("data", [])
 
 
+def _error_code_from_response(exc):
+    """Pulls SharpAPI's machine-readable error.code out of a failed
+    request's response body, e.g. "tier_restricted" or "book_not_selected"
+    (confirmed error codes per SharpAPI's docs - the latter is distinct
+    from tier_restricted: a book your plan tier allows but that isn't
+    enabled in your SharpAPI dashboard's own book selection). Falls back to
+    a generic label when the body isn't the documented error envelope."""
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return "request_failed"
+    try:
+        code = resp.json().get("error", {}).get("code")
+    except ValueError:
+        code = None
+    return code or f"http_{resp.status_code}"
+
+
 def fetch_all_odds(books, sport, league=None):
     """Pulls one page of odds per sportsbook (for one sport, optionally one
     league) and combines them. A book that errors out (bad id, temporary
-    outage) is skipped rather than failing the whole scan."""
+    outage, tier/dashboard restriction) is skipped rather than failing the
+    whole scan - but its reason is captured in the returned book_issues
+    dict (book id -> SharpAPI error code) so the caller can tell the user
+    WHY a toggled book contributed nothing, rather than silent emptiness.
+    Returns (rows, book_issues)."""
     all_rows = []
+    book_issues = {}
     for book in books:
         try:
             all_rows.extend(fetch_odds_for_book(book, sport=sport, league=league))
-        except requests.RequestException:
-            continue
-    return all_rows
+        except requests.RequestException as e:
+            book_issues[book] = _error_code_from_response(e)
+    return all_rows, book_issues
 
 
 def fetch_all_odds_for_sports(books, sports, league=None):
     """Loops fetch_all_odds() across every given sport, merging everything
     into one row list. This is what powers "scan everything" - it multiplies
     request count by len(sports), so it's meaningfully heavier than a
-    single-sport scan and shouldn't be run on a short auto-refresh timer."""
+    single-sport scan and shouldn't be run on a short auto-refresh timer.
+    Returns (rows, book_issues) - a book only ends up in book_issues if it
+    contributed zero rows across EVERY sport scanned, so a book that fails
+    on one sport (e.g. no coverage) but works on another isn't flagged as
+    broken."""
     all_rows = []
+    contributed = set()
+    book_issues = {}
     for sport in sports:
-        all_rows.extend(fetch_all_odds(books, sport, league=league))
-    return all_rows
+        rows, issues = fetch_all_odds(books, sport, league=league)
+        all_rows.extend(rows)
+        contributed.update(_normalize_book(r.get("sportsbook")) for r in rows)
+        book_issues.update(issues)
+    for book in list(book_issues):
+        if _normalize_book(book) in contributed:
+            del book_issues[book]
+    return all_rows, book_issues
 
 
 def _canonical_line(row):
@@ -365,19 +473,26 @@ def _canonical_line(row):
 
 
 def _is_stale_live_row(row, now=None):
-    """True if a LIVE row's own price is too old to trust, using its
-    "timestamp" field - the only freshness signal available for live rows,
-    since is_stale_pregame_price doesn't apply to them (see
+    """True if a LIVE row's own price is too old to trust, since
+    is_stale_pregame_price doesn't apply to live rows at all (see
     MAX_LIVE_ROW_AGE_SECONDS above). Non-live rows always return False here;
     their staleness is covered separately by is_stale_pregame_price.
 
-    A live row with a missing or unparseable timestamp is treated as stale
-    rather than assumed fresh - we can't verify it's current, and showing a
-    fake arb is worse than hiding a real one."""
+    Prefers "fetched_at" (per SharpAPI's docs: "when the upstream sportsbook
+    was last polled" - the more precise signal) and falls back to
+    "timestamp" (confirmed present on real rows, but per SharpAPI's own
+    docs it's "the time SharpAPI last refreshed that row through its
+    pipeline... not when the price last moved" - a slightly weaker signal,
+    though still the one this check was built and tested against, since
+    fetched_at hasn't actually been seen on a real row yet).
+
+    A live row with neither field, or an unparseable one, is treated as
+    stale rather than assumed fresh - we can't verify it's current, and
+    showing a fake arb is worse than hiding a real one."""
     if not row.get("is_live"):
         return False
 
-    raw_ts = row.get("timestamp")
+    raw_ts = row.get("fetched_at") or row.get("timestamp")
     if not raw_ts:
         return True
 
@@ -552,12 +667,13 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
 
 
 def fetch_sports():
-    """Calls SharpAPI's sports-list endpoint. Not yet confirmed against a
-    real response (unlike /odds) - inferred from the official Python SDK's
-    documented client.sports.list() method plus the {"data": [...]} wrapper
-    and id/name field convention every other confirmed endpoint uses
-    (matches the sport_ref shape seen embedded in real /odds rows, e.g.
-    {"id": "football", "name": "Football", "numerical_id": 12})."""
+    """Calls SharpAPI's sports-list endpoint - confirmed real per SharpAPI's
+    own docs (GET /api/v1/sports, Free tier, also listed as a public
+    reference endpoint reachable unauthenticated at 10 req/min - we still
+    send the API key for the higher tier-based rate limit). The exact
+    response field names below (id/name/label) are still not independently
+    confirmed for this specific endpoint - kept defensive with multiple
+    fallback keys for that reason."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/sports", headers=headers, timeout=10)
     resp.raise_for_status()
@@ -570,10 +686,9 @@ def fetch_sports():
 
 
 def fetch_leagues(sport):
-    """Calls SharpAPI's leagues-list endpoint for one sport. Same
-    confirmation caveat as fetch_sports() - inferred from the SDK's
-    client.leagues.list(sport) plus the league_ref shape seen in real /odds
-    rows, e.g. {"id": "nfl", "label": "NFL", "numerical_id": 376}."""
+    """Calls SharpAPI's leagues-list endpoint for one sport - confirmed real
+    per SharpAPI's own docs (GET /api/v1/leagues, Free tier, also a public
+    reference endpoint). Same field-name caveat as fetch_sports()."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     resp = requests.get(
         f"{SHARPAPI_BASE_URL}/api/v1/leagues", headers=headers, params={"sport": sport}, timeout=10
@@ -643,7 +758,7 @@ def api_leagues():
 
 @app.route("/api/books")
 def api_books():
-    return jsonify({"source": "live" if SHARPAPI_KEY else "mock", "books": BOOKS})
+    return jsonify({"source": "live" if SHARPAPI_KEY else "mock", "books": _book_catalog()})
 
 
 @app.route("/")
@@ -692,29 +807,39 @@ def api_arbs():
     arbs = None
     mode = None
     rows_scanned = None
+    # Per-book reason a toggled-on book contributed nothing (SharpAPI error
+    # code, e.g. "tier_restricted" or "book_not_selected" - confirmed
+    # distinct codes: the former means your plan tier doesn't cover this
+    # book at all, the latter means your plan tier DOES cover it but it
+    # isn't enabled in your SharpAPI dashboard's own book selection). Only
+    # populated on the odds-scan path, which queries one book at a time -
+    # the pre-computed opportunities endpoint doesn't expose this per book.
+    book_issues = {}
 
-    # The pre-computed arbitrage endpoint (if it exists at all) only makes
-    # sense for one sport/league at a time, so "scan everything" always
-    # goes straight to the odds-scan path below.
+    # The pre-computed arbitrage endpoint only makes sense for one
+    # sport/league at a time, so "scan everything" always goes straight to
+    # the odds-scan path below.
     if not scan_all_sports and not multi_sport and not scan_all_leagues:
         try:
             arbs = fetch_arbs_paid(books=selected_books)
             mode = "paid_endpoint"
         except Exception:
-            pass  # endpoint may not exist on this plan/product at all — fall back below
+            pass  # unconfirmed params for this endpoint — fall back below
 
     if arbs is None:
         try:
             if scan_all_sports:
                 sports_to_scan = get_cached_sport_ids()
-                rows = fetch_all_odds_for_sports(resolved_books, sports_to_scan, league=None)
+                rows, book_issues = fetch_all_odds_for_sports(resolved_books, sports_to_scan, league=None)
                 mode = "odds_scan_all_sports"
             elif multi_sport:
-                rows = fetch_all_odds_for_sports(resolved_books, sport_ids, league=None)
+                rows, book_issues = fetch_all_odds_for_sports(resolved_books, sport_ids, league=None)
                 mode = "odds_scan_multi_sport"
             else:
                 one_sport = sport_ids[0] if sport_ids else DEFAULT_SPORT
-                rows = fetch_all_odds(resolved_books, one_sport, league=None if scan_all_leagues else league_param)
+                rows, book_issues = fetch_all_odds(
+                    resolved_books, one_sport, league=None if scan_all_leagues else league_param
+                )
                 mode = "odds_scan"
             rows_scanned = len(rows)
             arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=",".join(resolved_books))
@@ -725,7 +850,13 @@ def api_arbs():
     # for this sport/league/book combination (worth investigating) - as
     # opposed to rows_scanned>0 with zero arbs, which just means real prices
     # were found but none of them crossed into arbitrage territory (normal).
-    payload = {"source": "live", "mode": mode, "rows_scanned": rows_scanned, "arbs": arbs}
+    payload = {
+        "source": "live",
+        "mode": mode,
+        "rows_scanned": rows_scanned,
+        "book_issues": book_issues,
+        "arbs": arbs,
+    }
     _arbs_cache[cache_key] = (time.time(), payload)
     return jsonify(payload)
 

@@ -29,9 +29,10 @@ const BOOKS_SECTION_COLLAPSED_KEY = "arbScreenerBooksSectionCollapsed";
 const CUSTOM_BOOKS_KEY = "arbScreenerCustomBooks";
 const SELECTED_BOOK_IDS_KEY = "arbScreenerSelectedBookIds";
 
-// Confirmed rate limit: 150 requests/minute. A normal scan (one book
-// toggled on = one request) at this interval stays well under budget even
-// with all 5 books selected (5 req / 15s = 20 req/min, ~13% of the limit).
+// Confirmed rate limit for the Hobby plan (per SharpAPI's own docs):
+// 120 requests/minute. A normal scan (one book toggled on = one request)
+// at this interval stays well under budget even with all 5 plan books
+// selected (5 req / 15s = 20 req/min, ~17% of the limit).
 const AUTO_REFRESH_INTERVAL_MS = 15000;
 const PREFERRED_DEFAULT_LEAGUE = "nfl";
 
@@ -305,7 +306,7 @@ function updateScanScopeState() {
   // league, so it does NOT need to disable auto-refresh.
   const heavy = selectedSportIds.size > 1;
   if (heavy) {
-    scanScopeNoteEl.textContent = `Scanning ${selectedSportIds.size} sports means one API request per sport per book selected — with your 150 requests/minute limit, a single scan like this can use a meaningful chunk of that budget at once. Auto-refresh has been turned off so it doesn't repeat automatically; use the Refresh button when you want to re-scan.`;
+    scanScopeNoteEl.textContent = `Scanning ${selectedSportIds.size} sports means one API request per sport per book selected — with your 120 requests/minute limit, a single scan like this can use a meaningful chunk of that budget at once. Auto-refresh has been turned off so it doesn't repeat automatically; use the Refresh button when you want to re-scan.`;
     scanScopeNoteEl.hidden = false;
     autoRefreshCheckbox.checked = false;
     autoRefreshCheckbox.disabled = true;
@@ -352,6 +353,30 @@ async function loadBooks() {
 }
 
 const TIER_LABELS = { free: "Free", hobby: "Hobby", pro: "Pro", sharp: "Sharp" };
+
+// SharpAPI's confirmed error codes for a book that contributed nothing -
+// tier_restricted (your plan tier doesn't cover it) is a different problem
+// than book_not_selected (your tier DOES cover it, but it isn't turned on
+// in your SharpAPI dashboard's own book selection) - worth telling apart
+// since only one of those is fixable by a toggle in your SharpAPI account,
+// not this site.
+const BOOK_ISSUE_LABELS = {
+  tier_restricted: "needs a higher SharpAPI plan tier",
+  book_not_selected: "not enabled in your SharpAPI dashboard's book selection",
+  rate_limited: "rate limited — try again shortly",
+  request_failed: "unreachable",
+};
+
+function describeBookIssues(bookIssues) {
+  if (!bookIssues || !Object.keys(bookIssues).length) return "";
+  const parts = Object.entries(bookIssues).map(([id, code]) => {
+    const known = allBooks.find((b) => normalizeBookKey(b.id) === normalizeBookKey(id));
+    const label = known ? known.display_name : id;
+    const reason = BOOK_ISSUE_LABELS[code] || code;
+    return `${label} (${reason})`;
+  });
+  return ` · Skipped: ${parts.join(", ")}`;
+}
 
 function escapeHtml(str) {
   const div = document.createElement("div");
@@ -521,6 +546,7 @@ async function loadArbs() {
       const shown = getFilteredArbs().length;
       statusEl.textContent = `Live data · ${shown} opportunit${shown === 1 ? "y" : "ies"} shown · updated ${new Date().toLocaleTimeString()}`;
     }
+    statusEl.textContent += describeBookIssues(data.book_issues);
 
     renderArbs();
   } catch (err) {

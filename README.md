@@ -56,19 +56,24 @@ To run the regression tests instead of the site: `python tests.py`.
   — sent to SharpAPI's filter, and independently re-checked on every
   returned leg, so a book you didn't select can never appear in a result
   even if SharpAPI's own filter is ignored or misparsed. Beyond the 5 books
-  in `SHARPAPI_BOOKS`, every other sportsbook SharpAPI documents
-  (`SPORTSBOOK_CATALOG` in `app.py`, ~40 books — transcribed directly from
-  SharpAPI's own "Supported Sportsbooks" docs page, not guessed) is offered
-  as an unchecked toggle, tagged with the SharpAPI plan tier it requires
-  (Free/Hobby/Pro/Sharp). Toggling one on only pulls data once it's active
-  on your current plan — a book above your plan's tier just returns
-  nothing for that toggle, same as any book you haven't enabled at all.
-  For anything not in that list (a brand-new SharpAPI addition), there's
-  also an "Add a sportsbook" box in the Sportsbooks panel — type the exact
-  id from your SharpAPI dashboard to add a toggle for it immediately, no
-  code change or redeploy needed. Custom-added books and your current
-  toggle selections are both remembered in the browser (localStorage)
-  across visits.
+  in `SHARPAPI_BOOKS`, every other sportsbook is offered as an unchecked
+  toggle, tagged with the SharpAPI plan tier it requires (Free/Hobby/Pro/
+  Sharp) — live-fetched from SharpAPI's own confirmed-real
+  `/api/v1/sportsbooks` endpoint (`get_sportsbook_list()` in `app.py`), so
+  a brand-new book shows up automatically without a code change; falls
+  back to `SPORTSBOOK_CATALOG`, a static list hand-transcribed from
+  SharpAPI's "Supported Sportsbooks" docs page, if that live call fails.
+  Toggling one on only pulls data once it's actually active for your
+  account — and that's gated *two* independent ways on SharpAPI's side, not
+  just plan tier: a book can be within your tier but still return nothing
+  if it isn't turned on in your SharpAPI dashboard's own book selection.
+  The status line tells the two apart (see `book_issues` above) instead of
+  both just looking like silence. For anything missing entirely (e.g. a
+  brand-new addition before either list picks it up), there's also an "Add
+  a sportsbook" box in the Sportsbooks panel — type the exact id from your
+  SharpAPI dashboard to add a toggle for it immediately. Custom-added books
+  and your current toggle selections are both remembered in the browser
+  (localStorage) across visits.
 - **Sports and Sportsbooks panels collapse independently** of each other
   and of the outer Filters panel, so you can close one while working on
   the other instead of everything competing for space at once.
@@ -120,19 +125,28 @@ sportsbook apps) before these checks existed. All are covered by
 - **Book selection and sport/league scope are enforced server-side**,
   independent of whatever SharpAPI's own query filters actually do.
 - **A short server-side cache (8s)** prevents rapid toggle-clicking or
-  multiple open tabs from burning through the API's rate limit
-  (confirmed: 150 requests/minute).
+  multiple open tabs from burning through the API's rate limit (Hobby plan:
+  120 requests/minute, confirmed against SharpAPI's own docs).
 
 ## A note on the SharpAPI integration
-The confirmed-real endpoint is `/api/v1/odds` (sport + optional league +
-sportsbook), which is what all arb-matching is actually built on. A
-pre-computed `/api/v1/opportunities/arbitrage` endpoint is attempted first
-as a bonus (documented in SharpAPI's marketing material, but never
-confirmed to actually exist — no "Opportunities" tab has ever shown up in
-SharpAPI's own playground) and falls back to the confirmed `/odds`-based
-matching on any failure. `/api/v1/sports` and `/api/v1/leagues` (for the
-sport/league dropdowns) are similarly unconfirmed and fall back to a small
-hardcoded list on failure.
+The confirmed-real endpoint `/api/v1/odds` (sport + optional league +
+sportsbook) is what all arb-matching is actually built on. A pre-computed
+`/api/v1/opportunities/arbitrage` endpoint is attempted first as a bonus -
+confirmed to be a real, documented endpoint (Hobby tier or higher, which
+this site's plan is), but its exact query params/response fields for this
+specific endpoint aren't confirmed yet, so it falls back to the
+`/odds`-based matching on any failure, not just a 403. `/api/v1/sports`,
+`/api/v1/leagues`, and `/api/v1/sportsbooks` (for the sport/league
+dropdowns and the sportsbook toggle catalog) are all confirmed-real too,
+each with a small hardcoded fallback if the live call fails.
+
+**Two separate ways a book can return nothing**, per SharpAPI's documented
+error codes: `tier_restricted` (your plan tier doesn't cover this book at
+all) vs `book_not_selected` (your tier does cover it, but it isn't turned
+on in your SharpAPI dashboard's own book selection - a second, independent
+gate beyond this site's own toggles). `/api/arbs` surfaces which books hit
+which reason as `book_issues` in its response, shown in the status line as
+"Skipped: <book> (<reason>)" instead of silent emptiness.
 
 If something looks wrong, `/api/test-odds` is a diagnostic route that
 confirms whether the API key and sport/league params work at all against
