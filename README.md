@@ -34,7 +34,7 @@ Once you've upgraded to the Hobby plan and have a real API key:
 2. Set `SHARPAPI_BOOKS` to the exact 5 sportsbook ids you picked in your
    SharpAPI dashboard (comma-separated, no spaces) if they ever change —
    the default in `.env.example` is currently set to betrivers, fanduel,
-   betmgm, draftkings, betano.
+   betmgm, draftkings, kalshi.
 3. Restart the site. It will automatically switch from sample data to live data.
 
 ## Deploying so you have a permanent link (Railway example)
