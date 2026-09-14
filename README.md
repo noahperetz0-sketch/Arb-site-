@@ -31,10 +31,12 @@ try it locally:
 Once you've upgraded to the Hobby plan and have a real API key:
 1. Set an environment variable called `SHARPAPI_KEY` to your key.
    (Never paste it directly into the code or share it in chat.)
-2. Set `SHARPAPI_BOOKS` to the exact 5 sportsbook ids you picked in your
+2. Set `SHARPAPI_BOOKS` to the exact sportsbook ids you picked in your
    SharpAPI dashboard (comma-separated, no spaces) if they ever change —
-   the default in `.env.example` is currently set to betrivers, fanduel,
-   betmgm, draftkings, kalshi.
+   the default in `.env.example` is currently set to just 4 (betrivers,
+   fanduel, betmgm, draftkings). Betano was the intended 5th but is
+   returning no data from SharpAPI (see below); Kalshi was tried as a
+   replacement but isn't usable in Canada, so the list is at 4 for now.
 3. Restart the site. It will automatically switch from sample data to live data.
 
 ## Deploying so you have a permanent link (Railway example)
