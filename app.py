@@ -170,10 +170,7 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
             continue
         if not all(_normalize_book(leg.get("sportsbook")) in allowed_books for leg in raw_legs):
             continue
-        # Same guard as compute_arbs_from_odds: every leg must be a
-        # different sportsbook, or it isn't a real cross-book arb.
-        leg_books = [_normalize_book(leg.get("sportsbook")) for leg in raw_legs]
-        if len(set(leg_books)) != len(raw_legs):
+        if not _legs_form_valid_arb(raw_legs):
             continue
 
         arbs.append({
@@ -237,6 +234,32 @@ def fetch_all_odds_for_sports(books, sports, league=None):
     for sport in sports:
         all_rows.extend(fetch_all_odds(books, sport, league=league))
     return all_rows
+
+
+def _legs_form_valid_arb(legs):
+    """The non-negotiable rules for what is allowed to be shown as an
+    arbitrage opportunity on this site. This tool is arbitrage-only - every
+    leg must be a real, independently-placeable bet on the SAME real-world
+    outcome-set, priced by DIFFERENT books, or it isn't arbitrage and must
+    never be shown:
+
+    1. Every leg's sportsbook must be different from every other leg's.
+       Two prices from the same book are not a hedge (the book will notice
+       and can void/limit it), and shouldn't even be possible to observe as
+       profitable under normal pricing.
+    2. Every leg must be the same event, same market, same players/teams -
+       enforced upstream by the (event_id, market_type, |line|) grouping
+       key this is only ever called against, never by this function itself.
+       (A market with mixed players, e.g. two different WNBA players'
+       point props sharing a market_type, must be excluded from the row
+       data before it ever reaches grouping - see the "player" checks in
+       compute_arbs_from_odds - not handled here.)
+
+    Called once, right before accepting a candidate arb, so a future change
+    to the matching logic above can't silently drop this check.
+    """
+    leg_books = [_normalize_book(leg.get("sportsbook", "")) for leg in legs]
+    return len(set(leg_books)) == len(legs)
 
 
 def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
@@ -315,15 +338,7 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         if len(legs) < 2 or len(legs) != len(unique_selection_types):
             continue  # a selection with no usable price means the market isn't fully covered
 
-        # Every leg must come from a DIFFERENT sportsbook. Without this, if
-        # only one book has data for a market, "best price per side" comes
-        # from that same book on both sides - not a real cross-book arb (a
-        # book pricing itself into a hedge against its own two sides should
-        # essentially never happen; if it does, it isn't something you can
-        # actually bet both sides of at one book without getting limited or
-        # voided, so it must never be shown here).
-        leg_books = [_normalize_book(leg.get("sportsbook", "")) for leg in legs]
-        if len(set(leg_books)) != len(legs):
+        if not _legs_form_valid_arb(legs):
             continue
 
         implied_sum = sum(1.0 / leg["odds_decimal"] for leg in legs)
