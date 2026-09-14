@@ -170,6 +170,11 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
             continue
         if not all(_normalize_book(leg.get("sportsbook")) in allowed_books for leg in raw_legs):
             continue
+        # Same guard as compute_arbs_from_odds: every leg must be a
+        # different sportsbook, or it isn't a real cross-book arb.
+        leg_books = [_normalize_book(leg.get("sportsbook")) for leg in raw_legs]
+        if len(set(leg_books)) != len(raw_legs):
+            continue
 
         arbs.append({
             "event_name": arb.get("event_name", ""),
@@ -252,6 +257,12 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     props share the same market_type), and matching that reliably would
     mean parsing player names out of free-text selection strings — too
     fragile to trust with real money.
+
+    Rows SharpAPI itself flags as is_stale_pregame_price are dropped before
+    ever entering the "best price" comparison - an old, unrefreshed price
+    can otherwise get picked as the "best" price for a side purely because
+    it happens to be higher, producing an arb against a number that isn't
+    actually live/bettable anymore.
     """
     allowed_books = {_normalize_book(b) for b in (books or SHARPAPI_BOOKS).split(",")}
 
@@ -260,6 +271,8 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         if not row.get("is_active", True):
             continue
         if row.get("is_player_prop"):
+            continue
+        if row.get("is_stale_pregame_price"):
             continue
         if not isinstance(row.get("odds_decimal"), (int, float)) or row["odds_decimal"] <= 1:
             continue
@@ -291,6 +304,17 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         legs = list(best_by_selection.values())
         if len(legs) < 2 or len(legs) != len(unique_selection_types):
             continue  # a selection with no usable price means the market isn't fully covered
+
+        # Every leg must come from a DIFFERENT sportsbook. Without this, if
+        # only one book has data for a market, "best price per side" comes
+        # from that same book on both sides - not a real cross-book arb (a
+        # book pricing itself into a hedge against its own two sides should
+        # essentially never happen; if it does, it isn't something you can
+        # actually bet both sides of at one book without getting limited or
+        # voided, so it must never be shown here).
+        leg_books = [_normalize_book(leg.get("sportsbook", "")) for leg in legs]
+        if len(set(leg_books)) != len(legs):
+            continue
 
         implied_sum = sum(1.0 / leg["odds_decimal"] for leg in legs)
         if implied_sum >= 1.0:
