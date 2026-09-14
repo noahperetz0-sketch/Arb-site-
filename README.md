@@ -95,7 +95,7 @@ sportsbook apps) before these checks existed. All are covered by
   when the actual live line had already moved to -560, almost certainly
   right after a goal, producing a fake ~20% "arb" that wasn't real (the
   Place Bet deep link 404'd — the book had already invalidated that quote).
-  Any live row older than 30 seconds is now dropped, using its own
+  Any live row older than 10 seconds is now dropped, using its own
   timestamp field, since no equivalent "stale live price" flag exists.
 - **A sanity cap on profit** (25%) is applied regardless of source — real
   cross-book arbs are almost always single-digit percentages, so anything

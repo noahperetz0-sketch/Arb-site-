@@ -38,7 +38,7 @@ MAX_SANE_PROFIT_PERCENT = 25.0
 # Live odds should refresh within seconds of a game event, so any live row
 # older than this is treated as stale and dropped, using the row's own
 # "timestamp" field since no equivalent live-staleness flag exists.
-MAX_LIVE_ROW_AGE_SECONDS = 30
+MAX_LIVE_ROW_AGE_SECONDS = 10
 
 # Confirmed rate limit: 150 requests/minute. A single-sport scan (one
 # request per selected book) stays cheap; "all sports"/"all leagues" scans
