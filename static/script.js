@@ -5,7 +5,9 @@ const statusEl = document.getElementById("status");
 const booksPanelEl = document.getElementById("booksPanel");
 const toggleAllBtn = document.getElementById("toggleAllBtn");
 const autoRefreshCheckbox = document.getElementById("autoRefresh");
-const sportSelectEl = document.getElementById("sportSelect");
+const sportsPanelEl = document.getElementById("sportsPanel");
+const toggleAllSportsBtn = document.getElementById("toggleAllSportsBtn");
+const leagueRowEl = document.getElementById("leagueRow");
 const leagueSelectEl = document.getElementById("leagueSelect");
 const sportLeagueNoteEl = document.getElementById("sportLeagueNote");
 const scanScopeNoteEl = document.getElementById("scanScopeNote");
@@ -15,16 +17,16 @@ const liveFilterSelect = document.getElementById("liveFilter");
 // toggled on = one request) at this interval stays well under budget even
 // with all 5 books selected (5 req / 15s = 20 req/min, ~13% of the limit).
 const AUTO_REFRESH_INTERVAL_MS = 15000;
-const PREFERRED_DEFAULT_SPORT = "football";
 const PREFERRED_DEFAULT_LEAGUE = "nfl";
 
 let currentArbs = [];
 let allBooks = [];          // [{id, display_name}, ...]
 let selectedBookIds = new Set();
+let allSports = [];         // [{id, name}, ...]
+let selectedSportIds = new Set();
+let currentLeague = "all";  // only meaningful when exactly one sport is selected
 let isLoading = false;
 let autoRefreshTimer = null;
-let currentSport = "";
-let currentLeague = "";
 
 function showSportLeagueNote(text) {
   if (!text) {
@@ -39,24 +41,77 @@ async function loadSports() {
   try {
     const res = await fetch("/api/sports");
     const data = await res.json();
-    const sports = data.sports || [];
-    const options = [{ id: "all", name: "All Sports" }, ...sports];
-    sportSelectEl.innerHTML = options.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+    allSports = data.sports || [];
+    const preferredIds = new Set(data.preferred || []);
+    const availableIds = new Set(allSports.map((s) => s.id));
+    const preferredAvailable = [...preferredIds].filter((id) => availableIds.has(id));
+
+    // Preselect the preferred sports (basketball/football/hockey/soccer/
+    // tennis) wherever they actually exist in the real list; if none of
+    // them matched at all, fall back to just the first sport so something
+    // is always selected rather than nothing.
+    selectedSportIds = new Set(
+      preferredAvailable.length ? preferredAvailable : (allSports[0] ? [allSports[0].id] : [])
+    );
 
     if (data.source === "error") {
       showSportLeagueNote(`Couldn't reach SharpAPI's sports list (${data.error}) — showing a short fallback list instead.`);
     }
 
-    const preferred = sports.find((s) => s.id === PREFERRED_DEFAULT_SPORT);
-    currentSport = preferred ? preferred.id : (sports[0] ? sports[0].id : "all");
-    sportSelectEl.value = currentSport;
+    renderSportsPanel();
   } catch (err) {
     console.error("Failed to load sports:", err);
-    sportSelectEl.innerHTML = `<option value="all">All Sports</option>`;
-    currentSport = "all";
-    showSportLeagueNote('Couldn\'t load the sports list — defaulting to "All Sports".');
+    showSportLeagueNote("Couldn't load the sports list. Try refreshing the page.");
   }
 }
+
+function renderSportsPanel() {
+  if (!allSports.length) {
+    sportsPanelEl.innerHTML = "";
+    toggleAllSportsBtn.style.display = "none";
+    return;
+  }
+  toggleAllSportsBtn.style.display = "inline-block";
+
+  sportsPanelEl.innerHTML = allSports
+    .map((s) => {
+      const checked = selectedSportIds.has(s.id) ? "checked" : "";
+      return `
+        <label class="book-toggle">
+          <input type="checkbox" data-sport-id="${s.id}" ${checked} />
+          ${s.name}
+        </label>
+      `;
+    })
+    .join("");
+
+  sportsPanelEl.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+    cb.addEventListener("change", async (e) => {
+      const id = e.target.getAttribute("data-sport-id");
+      if (e.target.checked) {
+        selectedSportIds.add(id);
+      } else {
+        selectedSportIds.delete(id);
+      }
+      updateToggleAllSportsLabel();
+      await onSportSelectionChanged();
+    });
+  });
+
+  updateToggleAllSportsLabel();
+}
+
+function updateToggleAllSportsLabel() {
+  const allSelected = allSports.length > 0 && selectedSportIds.size === allSports.length;
+  toggleAllSportsBtn.textContent = allSelected ? "Deselect All" : "Select All";
+}
+
+toggleAllSportsBtn.addEventListener("click", async () => {
+  const allSelected = allSports.length > 0 && selectedSportIds.size === allSports.length;
+  selectedSportIds = allSelected ? new Set() : new Set(allSports.map((s) => s.id));
+  renderSportsPanel();
+  await onSportSelectionChanged();
+});
 
 // "All Leagues" is always offered, even if the specific-leagues fetch below
 // fails or comes back empty — it just omits the league filter server-side,
@@ -87,7 +142,7 @@ async function loadLeagues(sport) {
       showSportLeagueNote(null);
     }
 
-    const preferred = sport === PREFERRED_DEFAULT_SPORT ? leagues.find((l) => l.id === PREFERRED_DEFAULT_LEAGUE) : null;
+    const preferred = leagues.find((l) => l.id === PREFERRED_DEFAULT_LEAGUE);
     currentLeague = preferred ? preferred.id : leagues[0].id;
     leagueSelectEl.value = currentLeague;
   } catch (err) {
@@ -98,13 +153,32 @@ async function loadLeagues(sport) {
   }
 }
 
+// Called whenever the set of checked sports changes. The League dropdown
+// only makes sense when exactly one sport is picked (a league belongs to
+// one sport, not several), so it's hidden the rest of the time and the
+// scan implicitly covers every league within whichever sport(s) are checked.
+async function onSportSelectionChanged() {
+  if (selectedSportIds.size === 1) {
+    const onlySport = [...selectedSportIds][0];
+    leagueRowEl.hidden = false;
+    await loadLeagues(onlySport);
+  } else {
+    leagueRowEl.hidden = true;
+    currentLeague = "all";
+    showSportLeagueNote(null);
+  }
+  updateScanScopeState();
+  loadArbs();
+}
+
 function updateScanScopeState() {
-  const heavy = currentSport === "all" || currentLeague === "all";
+  // Only looping across MULTIPLE sports multiplies request count (one
+  // request per sport per book) - a single sport with "All Leagues" is
+  // still just one request per book, exactly as cheap as one specific
+  // league, so it does NOT need to disable auto-refresh.
+  const heavy = selectedSportIds.size > 1;
   if (heavy) {
-    const scope = currentSport === "all"
-      ? "every sport"
-      : `all leagues in ${sportSelectEl.options[sportSelectEl.selectedIndex] ? sportSelectEl.options[sportSelectEl.selectedIndex].text : currentSport}`;
-    scanScopeNoteEl.textContent = `Scanning ${scope} means one API request per sport per book selected — with your 150 requests/minute limit, a single scan like this can burn through a big chunk of that budget at once. Auto-refresh has been turned off so it doesn't repeat automatically; use the Refresh button when you want to re-scan.`;
+    scanScopeNoteEl.textContent = `Scanning ${selectedSportIds.size} sports means one API request per sport per book selected — with your 150 requests/minute limit, a single scan like this can use a meaningful chunk of that budget at once. Auto-refresh has been turned off so it doesn't repeat automatically; use the Refresh button when you want to re-scan.`;
     scanScopeNoteEl.hidden = false;
     autoRefreshCheckbox.checked = false;
     autoRefreshCheckbox.disabled = true;
@@ -179,7 +253,13 @@ toggleAllBtn.addEventListener("click", () => {
 async function loadArbs() {
   if (isLoading) return; // don't stack overlapping requests (manual click + auto-refresh + toggle spam)
 
-  if (!currentSport || !currentLeague) return; // sports/leagues haven't finished loading yet
+  if (selectedSportIds.size === 0) {
+    statusEl.textContent = "No sports selected — toggle at least one on to scan.";
+    statusEl.classList.remove("is-loading");
+    currentArbs = [];
+    renderArbs();
+    return;
+  }
 
   if (selectedBookIds.size === 0) {
     statusEl.textContent = "No sportsbooks selected — toggle at least one on to scan.";
@@ -200,8 +280,8 @@ async function loadArbs() {
   try {
     const params = new URLSearchParams({
       books: Array.from(selectedBookIds).join(","),
-      sport: currentSport,
-      league: currentLeague,
+      sport: Array.from(selectedSportIds).join(","),
+      league: selectedSportIds.size === 1 ? currentLeague : "all",
     });
     const res = await fetch(`/api/arbs?${params}`);
     const data = await res.json();
@@ -333,27 +413,8 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-sportSelectEl.addEventListener("change", async () => {
-  currentSport = sportSelectEl.value;
-  if (currentSport === "all") {
-    // No single sport means no single league either - scanning "all sports"
-    // already implies every league within each of them.
-    leagueSelectEl.innerHTML = `<option value="all">All Leagues</option>`;
-    leagueSelectEl.value = "all";
-    leagueSelectEl.disabled = true;
-    currentLeague = "all";
-    showSportLeagueNote(null);
-  } else {
-    leagueSelectEl.disabled = false;
-    await loadLeagues(currentSport);
-  }
-  updateScanScopeState();
-  loadArbs();
-});
-
 leagueSelectEl.addEventListener("change", () => {
   currentLeague = leagueSelectEl.value;
-  updateScanScopeState();
   if (currentLeague) loadArbs();
 });
 
@@ -368,10 +429,15 @@ liveFilterSelect.addEventListener("change", () => {
 refreshBtn.addEventListener("click", loadArbs);
 totalStakeInput.addEventListener("input", renderArbs);
 
-// Initial load: get books and sports in parallel, then leagues for the
-// default sport, then the first arb scan.
+// Initial load: get books and sports in parallel, then leagues if exactly
+// one sport ended up preselected, then the first arb scan.
 Promise.all([loadBooks(), loadSports()]).then(async () => {
-  if (currentSport && currentSport !== "all") await loadLeagues(currentSport);
+  if (selectedSportIds.size === 1) {
+    leagueRowEl.hidden = false;
+    await loadLeagues([...selectedSportIds][0]);
+  } else {
+    leagueRowEl.hidden = true;
+  }
   updateScanScopeState();
   loadArbs();
   if (autoRefreshCheckbox.checked) startAutoRefresh();

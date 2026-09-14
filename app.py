@@ -59,10 +59,15 @@ _leagues_cache = {}  # sport -> (timestamp, [{"id","name"}])
 FALLBACK_SPORTS = [
     {"id": "football", "name": "Football"},
     {"id": "basketball", "name": "Basketball"},
+    {"id": "hockey", "name": "Hockey"},
     {"id": "soccer", "name": "Soccer"},
     {"id": "tennis", "name": "Tennis"},
     {"id": "esports", "name": "Esports"},
 ]
+
+# The sports this site's owner actually watches day to day - preselected
+# by default wherever the real sports list includes them.
+PREFERRED_SPORTS = ["basketball", "football", "hockey", "soccer", "tennis"]
 FALLBACK_LEAGUES = {
     "football": [{"id": "nfl", "name": "NFL"}],
 }
@@ -386,17 +391,17 @@ def get_cached_sport_ids():
 def api_sports():
     global _sports_cache
     if not SHARPAPI_KEY:
-        return jsonify({"source": "mock", "sports": FALLBACK_SPORTS})
+        return jsonify({"source": "mock", "sports": FALLBACK_SPORTS, "preferred": PREFERRED_SPORTS})
 
     if _sports_cache and time.time() - _sports_cache[0] < SPORTS_CACHE_TTL_SECONDS:
-        return jsonify({"source": "live", "sports": _sports_cache[1]})
+        return jsonify({"source": "live", "sports": _sports_cache[1], "preferred": PREFERRED_SPORTS})
 
     try:
         sports = fetch_sports()
         _sports_cache = (time.time(), sports)
-        return jsonify({"source": "live", "sports": sports})
+        return jsonify({"source": "live", "sports": sports, "preferred": PREFERRED_SPORTS})
     except Exception as e:
-        return jsonify({"source": "error", "error": str(e), "sports": FALLBACK_SPORTS}), 200
+        return jsonify({"source": "error", "error": str(e), "sports": FALLBACK_SPORTS, "preferred": PREFERRED_SPORTS}), 200
 
 
 @app.route("/api/leagues")
@@ -450,12 +455,18 @@ def api_arbs():
         return jsonify({"source": "mock", "arbs": MOCK_ARBS})
 
     selected_books = request.args.get("books")  # comma-separated, from the toggles
-    sport = request.args.get("sport", DEFAULT_SPORT)
-    league = request.args.get("league", DEFAULT_LEAGUE)
-    scan_all_sports = sport == "all"
-    scan_all_leagues = league == "all"
+    sport_param = request.args.get("sport", DEFAULT_SPORT)  # comma-separated sport ids, or "all"
+    league_param = request.args.get("league", DEFAULT_LEAGUE)
 
-    cache_key = (selected_books or SHARPAPI_BOOKS, sport, league)
+    scan_all_sports = sport_param == "all"
+    sport_ids = [] if scan_all_sports else [s.strip() for s in sport_param.split(",") if s.strip()]
+    # More than one sport means "scan every league within each of them" -
+    # a single league selection can't apply across different sports, so
+    # multi-sport mode always omits the league filter, same as "all leagues".
+    multi_sport = len(sport_ids) > 1
+    scan_all_leagues = league_param == "all" or multi_sport
+
+    cache_key = (selected_books or SHARPAPI_BOOKS, sport_param, league_param)
     cached = _arbs_cache.get(cache_key)
     if cached and time.time() - cached[0] < ARBS_CACHE_TTL_SECONDS:
         return jsonify(cached[1])
@@ -469,7 +480,7 @@ def api_arbs():
     # The pre-computed arbitrage endpoint (if it exists at all) only makes
     # sense for one sport/league at a time, so "scan everything" always
     # goes straight to the odds-scan path below.
-    if not scan_all_sports and not scan_all_leagues:
+    if not scan_all_sports and not multi_sport and not scan_all_leagues:
         try:
             arbs = fetch_arbs_paid(books=selected_books)
             mode = "paid_endpoint"
@@ -482,8 +493,12 @@ def api_arbs():
                 sports_to_scan = get_cached_sport_ids()
                 rows = fetch_all_odds_for_sports(resolved_books, sports_to_scan, league=None)
                 mode = "odds_scan_all_sports"
+            elif multi_sport:
+                rows = fetch_all_odds_for_sports(resolved_books, sport_ids, league=None)
+                mode = "odds_scan_multi_sport"
             else:
-                rows = fetch_all_odds(resolved_books, sport, league=None if scan_all_leagues else league)
+                one_sport = sport_ids[0] if sport_ids else DEFAULT_SPORT
+                rows = fetch_all_odds(resolved_books, one_sport, league=None if scan_all_leagues else league_param)
                 mode = "odds_scan"
             rows_scanned = len(rows)
             arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=",".join(resolved_books))
