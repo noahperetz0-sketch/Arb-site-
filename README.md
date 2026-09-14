@@ -55,7 +55,19 @@ To run the regression tests instead of the site: `python tests.py`.
 - **Sportsbook toggles**: pick which of your books to scan. Enforced twice
   — sent to SharpAPI's filter, and independently re-checked on every
   returned leg, so a book you didn't select can never appear in a result
-  even if SharpAPI's own filter is ignored or misparsed.
+  even if SharpAPI's own filter is ignored or misparsed. Beyond the 5 books
+  in `SHARPAPI_BOOKS`, a broader catalog of common sportsbook ids
+  (`CANDIDATE_SPORTSBOOKS` in `app.py`) is offered unchecked — these are
+  *not* individually confirmed against SharpAPI, so toggling one on only
+  works once it's actually active on your plan. Since your SharpAPI plan's
+  book selection changes over time, there's also an "Add a sportsbook" box
+  in the Sportsbooks panel — type the exact id from your SharpAPI dashboard
+  to add a toggle for it immediately, no code change or redeploy needed.
+  Custom-added books and your current toggle selections are both
+  remembered in the browser (localStorage) across visits.
+- **Sports and Sportsbooks panels collapse independently** of each other
+  and of the outer Filters panel, so you can close one while working on
+  the other instead of everything competing for space at once.
 - **Live/Pre-match filter**: filters the currently-loaded results
   client-side, no extra API call.
 - **Place Bet button**: opens SharpAPI's deep link for that leg on that

@@ -31,8 +31,12 @@
 
     <div id="filtersPanel" class="filters-panel">
       <div class="filter-group">
-        <div class="sport-header">
-          <span class="books-title">Sports</span>
+        <div class="section-header">
+          <button id="sportsToggleBtn" class="section-toggle" type="button" aria-expanded="true">
+            <span class="filters-chevron" aria-hidden="true">▾</span>
+            <span class="section-title">Sports</span>
+            <span id="sportsSectionSummary" class="section-summary"></span>
+          </button>
           <button id="toggleAllSportsBtn" class="toggle-all-btn" type="button" style="display: none;">Select All</button>
         </div>
         <div id="sportsPanel" class="books-panel"></div>
@@ -47,11 +51,21 @@
       <div id="scanScopeNote" class="sport-league-note" hidden></div>
 
       <div class="filter-group">
-        <div class="books-header">
-          <span class="books-title">Sportsbooks</span>
+        <div class="section-header">
+          <button id="booksToggleBtn" class="section-toggle" type="button" aria-expanded="true">
+            <span class="filters-chevron" aria-hidden="true">▾</span>
+            <span class="section-title">Sportsbooks</span>
+            <span id="booksSectionSummary" class="section-summary"></span>
+          </button>
           <button id="toggleAllBtn" class="toggle-all-btn" type="button" style="display: none;">Select All</button>
         </div>
-        <div id="booksPanel" class="books-panel"></div>
+        <div id="booksSectionBody">
+          <div id="booksPanel" class="books-panel"></div>
+          <form id="addBookForm" class="add-book-form">
+            <input type="text" id="addBookInput" placeholder="Add a sportsbook id (e.g. caesars)" autocomplete="off" />
+            <button type="submit" class="add-book-btn">Add</button>
+          </form>
+        </div>
       </div>
 
       <div class="filter-group filter-row">

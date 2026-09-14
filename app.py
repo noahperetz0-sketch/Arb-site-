@@ -89,18 +89,79 @@ BOOK_DISPLAY_NAMES = {
     "betmgm": "BetMGM",
     "betrivers": "BetRivers",
     "betano": "Betano",
+    "caesars": "Caesars",
+    "pointsbet": "PointsBet",
+    "wynnbet": "WynnBET",
+    "bovada": "Bovada",
+    "bet365": "Bet365",
+    "unibet": "Unibet",
+    "williamhill": "William Hill",
+    "foxbet": "FOX Bet",
+    "superbook": "SuperBook",
+    "twinspires": "TwinSpires",
+    "hardrock": "Hard Rock Bet",
+    "espnbet": "ESPN BET",
+    "fanatics": "Fanatics Sportsbook",
+    "betfred": "Betfred",
+    "circa": "Circa Sports",
+    "betparx": "betPARX",
+    "tipico": "Tipico",
+    "pinnacle": "Pinnacle",
+    "bookmaker": "BookMaker",
+    "betonline": "BetOnline",
 }
+
+# A best-effort list of other real-world sportsbook ids to offer as toggles,
+# beyond whatever's in SHARPAPI_BOOKS. Unlike SHARPAPI_BOOKS, these are NOT
+# individually confirmed against a live SharpAPI response - if you toggle
+# one on and it contributes nothing, that almost certainly means it's not
+# active on your current SharpAPI plan/feed, not a bug here. This exists so
+# switching books on your SharpAPI plan doesn't require an env var change
+# and redeploy - just toggle it on here. Anything missing from this list
+# entirely can still be added by exact id from the "Add a sportsbook" box
+# in the UI itself.
+CANDIDATE_SPORTSBOOKS = [
+    "caesars", "pointsbet", "wynnbet", "bovada", "bet365", "unibet",
+    "williamhill", "foxbet", "superbook", "twinspires", "hardrock",
+    "espnbet", "fanatics", "betfred", "circa", "betparx", "tipico",
+    "pinnacle", "bookmaker", "betonline",
+]
+
+
+def _normalize_book(name):
+    """Collapses a book id/display name to a bare-lowercase key
+    ('DraftKings' / 'draft-kings' / 'draftkings' all -> 'draftkings') so we
+    can compare the toggle selection against whatever casing a leg's
+    sportsbook field happens to use."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 
 def _book_display_name(book_id):
     return BOOK_DISPLAY_NAMES.get(book_id, book_id.title())
 
 
-BOOKS = [
-    {"id": b.strip(), "display_name": _book_display_name(b.strip())}
-    for b in SHARPAPI_BOOKS.split(",")
-    if b.strip()
-]
+def _book_catalog():
+    """Every sportsbook toggle offered in the UI: the plan-configured books
+    from SHARPAPI_BOOKS first (confirmed real, "preselected" so they're
+    checked by default), then CANDIDATE_SPORTSBOOKS for anything not
+    already covered (unconfirmed, unchecked by default - the user turns
+    one on once it's actually active on their SharpAPI plan). A candidate
+    id that's also in SHARPAPI_BOOKS is skipped to avoid listing it twice."""
+    plan_books = [b.strip() for b in SHARPAPI_BOOKS.split(",") if b.strip()]
+    plan_ids = {_normalize_book(b) for b in plan_books}
+
+    catalog = [
+        {"id": b, "display_name": _book_display_name(b), "preselected": True}
+        for b in plan_books
+    ]
+    for b in CANDIDATE_SPORTSBOOKS:
+        if _normalize_book(b) in plan_ids:
+            continue
+        catalog.append({"id": b, "display_name": _book_display_name(b), "preselected": False})
+    return catalog
+
+
+BOOKS = _book_catalog()
 
 # Mock data used only when no API key is set, so the site is viewable
 # immediately without any setup. Once SHARPAPI_KEY is set, real data is used.
@@ -128,14 +189,6 @@ MOCK_ARBS = [
         ],
     },
 ]
-
-
-def _normalize_book(name):
-    """Collapses a book id/display name to a bare-lowercase key
-    ('DraftKings' / 'draft-kings' / 'draftkings' all -> 'draftkings') so we
-    can compare the toggle selection against whatever casing a leg's
-    sportsbook field happens to use."""
-    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 
 def _format_american_odds(value):

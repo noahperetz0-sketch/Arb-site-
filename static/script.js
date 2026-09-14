@@ -15,8 +15,19 @@ const liveFilterSelect = document.getElementById("liveFilter");
 const filtersToggleBtn = document.getElementById("filtersToggleBtn");
 const filtersPanelEl = document.getElementById("filtersPanel");
 const filtersSummaryEl = document.getElementById("filtersSummary");
+const sportsToggleBtn = document.getElementById("sportsToggleBtn");
+const sportsSectionSummaryEl = document.getElementById("sportsSectionSummary");
+const booksToggleBtn = document.getElementById("booksToggleBtn");
+const booksSectionSummaryEl = document.getElementById("booksSectionSummary");
+const booksSectionBodyEl = document.getElementById("booksSectionBody");
+const addBookForm = document.getElementById("addBookForm");
+const addBookInput = document.getElementById("addBookInput");
 
 const FILTERS_COLLAPSED_KEY = "arbScreenerFiltersCollapsed";
+const SPORTS_SECTION_COLLAPSED_KEY = "arbScreenerSportsSectionCollapsed";
+const BOOKS_SECTION_COLLAPSED_KEY = "arbScreenerBooksSectionCollapsed";
+const CUSTOM_BOOKS_KEY = "arbScreenerCustomBooks";
+const SELECTED_BOOK_IDS_KEY = "arbScreenerSelectedBookIds";
 
 // Confirmed rate limit: 150 requests/minute. A normal scan (one book
 // toggled on = one request) at this interval stays well under budget even
@@ -66,6 +77,87 @@ function setFiltersCollapsed(collapsed) {
 filtersToggleBtn.addEventListener("click", () => {
   setFiltersCollapsed(!filtersPanelEl.hidden);
 });
+
+// Sports and Sportsbooks are independently collapsible sub-sections of the
+// Filters panel, so either can be closed while working on the other
+// instead of both always being open together.
+function setSectionCollapsed(toggleBtn, panelEl, storageKey, collapsed) {
+  panelEl.hidden = collapsed;
+  toggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  try {
+    localStorage.setItem(storageKey, collapsed ? "1" : "0");
+  } catch (err) {
+    // private browsing / blocked storage - fine to just not persist
+  }
+}
+
+sportsToggleBtn.addEventListener("click", () => {
+  setSectionCollapsed(sportsToggleBtn, sportsPanelEl, SPORTS_SECTION_COLLAPSED_KEY, !sportsPanelEl.hidden);
+});
+
+booksToggleBtn.addEventListener("click", () => {
+  setSectionCollapsed(booksToggleBtn, booksSectionBodyEl, BOOKS_SECTION_COLLAPSED_KEY, !booksSectionBodyEl.hidden);
+});
+
+function updateSportsSectionSummary() {
+  const count = selectedSportIds.size;
+  sportsSectionSummaryEl.textContent = `${count} selected`;
+}
+
+function updateBooksSectionSummary() {
+  const count = selectedBookIds.size;
+  booksSectionSummaryEl.textContent = `${count} selected`;
+}
+
+// Light normalization for the id actually sent to SharpAPI as the
+// "sportsbook" param - just trims whitespace and lowercases, so it
+// preserves whatever exact id the user typed (SharpAPI's own id format
+// isn't confirmed beyond the 5 plan-configured books).
+function toBookId(raw) {
+  return raw.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+// Stricter normalization used only to detect duplicates (matches the
+// backend's _normalize_book), so "Bet Rivers" typed into "Add a
+// sportsbook" is recognized as the same book as the existing "betrivers".
+function normalizeBookKey(id) {
+  return (id || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function loadCustomBooksFromStorage() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_BOOKS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveCustomBooksToStorage() {
+  try {
+    const custom = allBooks.filter((b) => b.custom);
+    localStorage.setItem(CUSTOM_BOOKS_KEY, JSON.stringify(custom));
+  } catch (err) {
+    // private browsing / blocked storage - fine to just not persist
+  }
+}
+
+function loadSelectedBookIdsFromStorage() {
+  try {
+    const raw = localStorage.getItem(SELECTED_BOOK_IDS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function saveSelectedBookIdsToStorage() {
+  try {
+    localStorage.setItem(SELECTED_BOOK_IDS_KEY, JSON.stringify([...selectedBookIds]));
+  } catch (err) {
+    // private browsing / blocked storage - fine to just not persist
+  }
+}
 
 async function loadSports() {
   try {
@@ -125,11 +217,13 @@ function renderSportsPanel() {
       }
       updateToggleAllSportsLabel();
       updateFiltersSummary();
+      updateSportsSectionSummary();
       await onSportSelectionChanged();
     });
   });
 
   updateToggleAllSportsLabel();
+  updateSportsSectionSummary();
 }
 
 function updateToggleAllSportsLabel() {
@@ -142,6 +236,7 @@ toggleAllSportsBtn.addEventListener("click", async () => {
   selectedSportIds = allSelected ? new Set() : new Set(allSports.map((s) => s.id));
   renderSportsPanel();
   updateFiltersSummary();
+  updateSportsSectionSummary();
   await onSportSelectionChanged();
 });
 
@@ -225,9 +320,31 @@ async function loadBooks() {
   try {
     const res = await fetch("/api/books");
     const data = await res.json();
-    allBooks = data.books || [];
-    // Default: all books selected
-    selectedBookIds = new Set(allBooks.map((b) => b.id));
+    const serverBooks = (data.books || []).map((b) => ({ ...b, custom: false }));
+    const serverKeys = new Set(serverBooks.map((b) => normalizeBookKey(b.id)));
+
+    // Custom books added via the UI in a previous visit, minus any that
+    // now collide with a server-provided id (e.g. it got added to
+    // SHARPAPI_BOOKS/CANDIDATE_SPORTSBOOKS since).
+    const customBooks = loadCustomBooksFromStorage().filter(
+      (b) => !serverKeys.has(normalizeBookKey(b.id))
+    );
+
+    allBooks = [...serverBooks, ...customBooks];
+
+    const savedSelection = loadSelectedBookIdsFromStorage();
+    if (savedSelection) {
+      const knownIds = new Set(allBooks.map((b) => b.id));
+      selectedBookIds = new Set(savedSelection.filter((id) => knownIds.has(id)));
+      if (selectedBookIds.size === 0) {
+        // Nothing from the saved selection still exists (e.g. very stale
+        // storage) - fall back to the default rather than scanning nothing.
+        selectedBookIds = new Set(allBooks.filter((b) => b.preselected).map((b) => b.id));
+      }
+    } else {
+      selectedBookIds = new Set(allBooks.filter((b) => b.preselected).map((b) => b.id));
+    }
+
     renderBooksPanel();
   } catch (err) {
     console.error("Failed to load books:", err);
@@ -245,11 +362,17 @@ function renderBooksPanel() {
   booksPanelEl.innerHTML = allBooks
     .map((b) => {
       const checked = selectedBookIds.has(b.id) ? "checked" : "";
+      // The remove (x) button is a sibling of the label, not nested inside
+      // it - nesting a button inside a <label> wrapping a checkbox causes
+      // browsers to double-toggle the checkbox when the button is clicked.
+      const removeBtn = b.custom
+        ? `<button type="button" class="book-remove-btn" data-remove-book-id="${b.id}" title="Remove ${b.display_name}" aria-label="Remove ${b.display_name}">&times;</button>`
+        : "";
       return `
         <label class="book-toggle">
           <input type="checkbox" data-book-id="${b.id}" ${checked} />
           ${b.display_name}
-        </label>
+        </label>${removeBtn}
       `;
     })
     .join("");
@@ -264,11 +387,28 @@ function renderBooksPanel() {
       }
       updateToggleAllLabel();
       updateFiltersSummary();
+      updateBooksSectionSummary();
+      saveSelectedBookIdsToStorage();
       loadArbs(); // re-scan immediately with the new book selection
     });
   });
 
+  booksPanelEl.querySelectorAll("button[data-remove-book-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-remove-book-id");
+      allBooks = allBooks.filter((b) => b.id !== id);
+      selectedBookIds.delete(id);
+      saveCustomBooksToStorage();
+      saveSelectedBookIdsToStorage();
+      renderBooksPanel();
+      updateFiltersSummary();
+      updateBooksSectionSummary();
+      loadArbs();
+    });
+  });
+
   updateToggleAllLabel();
+  updateBooksSectionSummary();
 }
 
 function updateToggleAllLabel() {
@@ -279,6 +419,43 @@ function updateToggleAllLabel() {
 toggleAllBtn.addEventListener("click", () => {
   const allSelected = allBooks.length > 0 && selectedBookIds.size === allBooks.length;
   selectedBookIds = allSelected ? new Set() : new Set(allBooks.map((b) => b.id));
+  renderBooksPanel();
+  updateFiltersSummary();
+  saveSelectedBookIdsToStorage();
+  loadArbs();
+});
+
+// Lets the user add any exact sportsbook id from their own SharpAPI
+// dashboard that isn't already offered as a toggle - covers anything
+// missing from CANDIDATE_SPORTSBOOKS (an unconfirmed, best-effort list)
+// without needing a code change or redeploy.
+addBookForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const rawInput = addBookInput.value.trim();
+  if (!rawInput) return;
+
+  const id = toBookId(rawInput);
+  const key = normalizeBookKey(id);
+  if (!id || !key) return;
+
+  if (allBooks.some((b) => normalizeBookKey(b.id) === key)) {
+    addBookInput.value = "";
+    addBookInput.placeholder = "Already in the list above";
+    return;
+  }
+
+  const displayName = rawInput
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+  allBooks.push({ id, display_name: displayName, preselected: false, custom: true });
+  selectedBookIds.add(id);
+  addBookInput.value = "";
+
+  saveCustomBooksToStorage();
+  saveSelectedBookIdsToStorage();
   renderBooksPanel();
   updateFiltersSummary();
   loadArbs();
@@ -477,6 +654,22 @@ try {
   // private browsing / blocked storage - fine to just default to expanded
 }
 setFiltersCollapsed(startCollapsed);
+
+let sportsSectionStartCollapsed = false;
+try {
+  sportsSectionStartCollapsed = localStorage.getItem(SPORTS_SECTION_COLLAPSED_KEY) === "1";
+} catch (err) {
+  // private browsing / blocked storage - fine to just default to expanded
+}
+setSectionCollapsed(sportsToggleBtn, sportsPanelEl, SPORTS_SECTION_COLLAPSED_KEY, sportsSectionStartCollapsed);
+
+let booksSectionStartCollapsed = false;
+try {
+  booksSectionStartCollapsed = localStorage.getItem(BOOKS_SECTION_COLLAPSED_KEY) === "1";
+} catch (err) {
+  // private browsing / blocked storage - fine to just default to expanded
+}
+setSectionCollapsed(booksToggleBtn, booksSectionBodyEl, BOOKS_SECTION_COLLAPSED_KEY, booksSectionStartCollapsed);
 
 // Initial load: get books and sports in parallel, then leagues if exactly
 // one sport ended up preselected, then the first arb scan.
