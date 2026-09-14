@@ -218,6 +218,58 @@ button#refreshBtn:disabled {
   cursor: pointer;
 }
 
+.filter-row {
+  margin-bottom: 12px;
+}
+
+.live-filter-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.live-filter-label select {
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.live-filter-label select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.live-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  margin-left: 8px;
+  background: rgba(229, 72, 77, 0.15);
+  color: var(--red);
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.arb-event-time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.arb-profit-dollar {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+  margin-top: 2px;
+}
+
 .status {
   display: flex;
   align-items: center;

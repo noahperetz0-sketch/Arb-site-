@@ -67,6 +67,8 @@ MOCK_ARBS = [
         "event_name": "Lakers vs Celtics",
         "league": "NBA",
         "profit_percent": 3.4,
+        "event_start_time": "2026-10-22T23:30:00Z",
+        "is_live": False,
         "legs": [
             {"sportsbook": "DraftKings", "selection": "Lakers ML", "odds_american": "+150", "stake_percent": 42.0},
             {"sportsbook": "FanDuel", "selection": "Celtics ML", "odds_american": "-120", "stake_percent": 58.0},
@@ -76,6 +78,8 @@ MOCK_ARBS = [
         "event_name": "Chiefs vs Broncos",
         "league": "NFL",
         "profit_percent": 1.8,
+        "event_start_time": "2026-09-15T00:15:00Z",
+        "is_live": True,
         "legs": [
             {"sportsbook": "BetMGM", "selection": "Chiefs -2.5", "odds_american": "+105", "stake_percent": 49.0},
             {"sportsbook": "BetRivers", "selection": "Broncos +2.5", "odds_american": "-105", "stake_percent": 51.0},
@@ -140,6 +144,8 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
             "event_name": arb.get("event_name", ""),
             "league": arb.get("league", ""),
             "profit_percent": profit_percent,
+            "event_start_time": arb.get("event_start_time"),
+            "is_live": bool(arb.get("is_live", False)),
             "legs": [
                 {
                     "sportsbook": leg.get("sportsbook", ""),
@@ -273,6 +279,12 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
             "event_name": f"{away} @ {home}" if away and home else event_id,
             "league": f"{league.upper()} · {market_label}" if league else market_label,
             "profit_percent": round(profit_percent, 2),
+            "event_start_time": sample.get("event_start_time"),
+            # Any leg reporting live also means the market itself is live -
+            # the legs are the same real-world event, so True from any one
+            # of them is enough (a stale/lagging leg reporting False
+            # shouldn't hide that the event has actually started).
+            "is_live": any(bool(leg.get("is_live")) for leg in legs),
             "legs": arb_legs,
         })
 

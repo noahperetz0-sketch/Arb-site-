@@ -10,6 +10,7 @@ const customSportFieldsEl = document.getElementById("customSportFields");
 const customSportInput = document.getElementById("customSport");
 const customLeagueInput = document.getElementById("customLeague");
 const applyCustomSportBtn = document.getElementById("applyCustomSportBtn");
+const liveFilterSelect = document.getElementById("liveFilter");
 
 const AUTO_REFRESH_INTERVAL_MS = 30000;
 
@@ -116,7 +117,8 @@ async function loadArbs() {
     } else if (data.source === "error") {
       statusEl.textContent = `Couldn't reach SharpAPI (${data.error}). Showing sample data instead.`;
     } else {
-      statusEl.textContent = `Live data · ${currentArbs.length} opportunit${currentArbs.length === 1 ? "y" : "ies"} found · updated ${new Date().toLocaleTimeString()}`;
+      const shown = getFilteredArbs().length;
+      statusEl.textContent = `Live data · ${shown} opportunit${shown === 1 ? "y" : "ies"} shown · updated ${new Date().toLocaleTimeString()}`;
     }
 
     renderArbs();
@@ -131,16 +133,38 @@ async function loadArbs() {
   }
 }
 
+function getFilteredArbs() {
+  const filter = liveFilterSelect.value;
+  if (filter === "live") return currentArbs.filter((a) => a.is_live);
+  if (filter === "prematch") return currentArbs.filter((a) => !a.is_live);
+  return currentArbs;
+}
+
+function formatEventTime(isoString) {
+  if (!isoString) return "Start time unknown";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "Start time unknown";
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function renderArbs() {
   let totalStake = parseFloat(totalStakeInput.value);
   if (!Number.isFinite(totalStake) || totalStake < 0) totalStake = 0;
 
-  if (!currentArbs.length) {
-    arbListEl.innerHTML = `<div class="empty">No arbitrage opportunities right now. Try refreshing in a bit.</div>`;
+  const arbsToShow = getFilteredArbs();
+
+  if (!arbsToShow.length) {
+    arbListEl.innerHTML = `<div class="empty">No arbitrage opportunities match the current filters. Try refreshing or changing the sport/live filter.</div>`;
     return;
   }
 
-  arbListEl.innerHTML = currentArbs
+  arbListEl.innerHTML = arbsToShow
     .map((arb) => {
       const legsHtml = arb.legs
         .map((leg) => {
@@ -157,14 +181,21 @@ function renderArbs() {
         })
         .join(`<div class="leg-divider">vs</div>`);
 
+      const profitDollar = (totalStake * (arb.profit_percent / 100)).toFixed(2);
+      const liveBadge = arb.is_live ? `<span class="live-badge">LIVE</span>` : "";
+
       return `
         <div class="arb-card">
           <div class="arb-card-header">
             <div>
-              <div class="arb-event">${arb.event_name}</div>
+              <div class="arb-event">${arb.event_name}${liveBadge}</div>
               <div class="arb-league">${arb.league || ""}</div>
+              <div class="arb-event-time">${formatEventTime(arb.event_start_time)}</div>
             </div>
-            <div class="arb-profit">+${arb.profit_percent.toFixed(2)}%</div>
+            <div>
+              <div class="arb-profit">+${arb.profit_percent.toFixed(2)}%</div>
+              <div class="arb-profit-dollar">+$${profitDollar} on $${totalStake.toFixed(2)}</div>
+            </div>
           </div>
           <div class="legs-row">${legsHtml}</div>
         </div>
@@ -229,6 +260,14 @@ applyCustomSportBtn.addEventListener("click", () => {
   const league = customLeagueInput.value.trim().toLowerCase();
   if (!sport || !league) return;
   setSportLeague(sport, league);
+});
+
+liveFilterSelect.addEventListener("change", () => {
+  renderArbs();
+  const shown = getFilteredArbs().length;
+  if (statusEl.textContent.startsWith("Live data")) {
+    statusEl.textContent = `Live data · ${shown} opportunit${shown === 1 ? "y" : "ies"} shown · updated ${new Date().toLocaleTimeString()}`;
+  }
 });
 
 refreshBtn.addEventListener("click", loadArbs);
