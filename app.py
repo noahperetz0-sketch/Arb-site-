@@ -259,12 +259,20 @@ def _canonical_line(row):
     matching on raw magnitude alone (the old approach) can't tell two
     books' conflicting "who's favored" opinions apart.
 
+    Uses selection_type, not team_side, to detect the away side - team_side
+    turned out to be missing entirely from real MLB run_line rows (present
+    for NFL spreads, absent here), which silently defeated this whole check
+    for baseball and let the exact same bug back in. selection_type is
+    "home"/"away" for every 2-way team spread market seen across every
+    sport pulled so far (NFL, soccer, MLB) and is never missing, since it's
+    also the field everything else in this function already keys off of.
+
     Rows with no numeric line (moneylines) or no team framing (totals,
     over/under share the same line already) pass through unchanged."""
     line = row.get("line")
     if not isinstance(line, (int, float)):
         return line
-    return -line if row.get("team_side") == "away" else line
+    return -line if row.get("selection_type") == "away" else line
 
 
 def _legs_form_valid_arb(legs):
