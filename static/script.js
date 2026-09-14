@@ -12,6 +12,11 @@ const leagueSelectEl = document.getElementById("leagueSelect");
 const sportLeagueNoteEl = document.getElementById("sportLeagueNote");
 const scanScopeNoteEl = document.getElementById("scanScopeNote");
 const liveFilterSelect = document.getElementById("liveFilter");
+const filtersToggleBtn = document.getElementById("filtersToggleBtn");
+const filtersPanelEl = document.getElementById("filtersPanel");
+const filtersSummaryEl = document.getElementById("filtersSummary");
+
+const FILTERS_COLLAPSED_KEY = "arbScreenerFiltersCollapsed";
 
 // Confirmed rate limit: 150 requests/minute. A normal scan (one book
 // toggled on = one request) at this interval stays well under budget even
@@ -36,6 +41,31 @@ function showSportLeagueNote(text) {
   sportLeagueNoteEl.textContent = text;
   sportLeagueNoteEl.hidden = false;
 }
+
+// Kept up to date on every sport/book/live-filter change so the summary is
+// still useful when the panel is collapsed, not just when it's open.
+function updateFiltersSummary() {
+  const sportCount = selectedSportIds.size;
+  const bookCount = selectedBookIds.size;
+  const liveOption = liveFilterSelect.options[liveFilterSelect.selectedIndex];
+  const liveLabel = liveOption ? liveOption.textContent : "All events";
+  filtersSummaryEl.textContent =
+    `${sportCount} sport${sportCount === 1 ? "" : "s"} · ${bookCount} book${bookCount === 1 ? "" : "s"} · ${liveLabel}`;
+}
+
+function setFiltersCollapsed(collapsed) {
+  filtersPanelEl.hidden = collapsed;
+  filtersToggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  try {
+    localStorage.setItem(FILTERS_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch (err) {
+    // private browsing / blocked storage - fine to just not persist
+  }
+}
+
+filtersToggleBtn.addEventListener("click", () => {
+  setFiltersCollapsed(!filtersPanelEl.hidden);
+});
 
 async function loadSports() {
   try {
@@ -94,6 +124,7 @@ function renderSportsPanel() {
         selectedSportIds.delete(id);
       }
       updateToggleAllSportsLabel();
+      updateFiltersSummary();
       await onSportSelectionChanged();
     });
   });
@@ -110,6 +141,7 @@ toggleAllSportsBtn.addEventListener("click", async () => {
   const allSelected = allSports.length > 0 && selectedSportIds.size === allSports.length;
   selectedSportIds = allSelected ? new Set() : new Set(allSports.map((s) => s.id));
   renderSportsPanel();
+  updateFiltersSummary();
   await onSportSelectionChanged();
 });
 
@@ -231,6 +263,7 @@ function renderBooksPanel() {
         selectedBookIds.delete(id);
       }
       updateToggleAllLabel();
+      updateFiltersSummary();
       loadArbs(); // re-scan immediately with the new book selection
     });
   });
@@ -247,6 +280,7 @@ toggleAllBtn.addEventListener("click", () => {
   const allSelected = allBooks.length > 0 && selectedBookIds.size === allBooks.length;
   selectedBookIds = allSelected ? new Set() : new Set(allBooks.map((b) => b.id));
   renderBooksPanel();
+  updateFiltersSummary();
   loadArbs();
 });
 
@@ -423,6 +457,7 @@ leagueSelectEl.addEventListener("change", () => {
 });
 
 liveFilterSelect.addEventListener("change", () => {
+  updateFiltersSummary();
   renderArbs();
   const shown = getFilteredArbs().length;
   if (statusEl.textContent.startsWith("Live data")) {
@@ -432,6 +467,16 @@ liveFilterSelect.addEventListener("change", () => {
 
 refreshBtn.addEventListener("click", loadArbs);
 totalStakeInput.addEventListener("input", renderArbs);
+
+// Restore the collapsed/expanded state from last visit (defaults to
+// expanded, since a first-time visitor needs to see the controls at all).
+let startCollapsed = false;
+try {
+  startCollapsed = localStorage.getItem(FILTERS_COLLAPSED_KEY) === "1";
+} catch (err) {
+  // private browsing / blocked storage - fine to just default to expanded
+}
+setFiltersCollapsed(startCollapsed);
 
 // Initial load: get books and sports in parallel, then leagues if exactly
 // one sport ended up preselected, then the first arb scan.
@@ -443,6 +488,7 @@ Promise.all([loadBooks(), loadSports()]).then(async () => {
     leagueRowEl.hidden = true;
   }
   updateScanScopeState();
+  updateFiltersSummary();
   loadArbs();
   if (autoRefreshCheckbox.checked) startAutoRefresh();
 });
