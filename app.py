@@ -1,6 +1,7 @@
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 import requests
 from flask import Flask, jsonify, render_template, request
@@ -28,6 +29,16 @@ DEFAULT_LEAGUE = os.environ.get("SHARPAPI_LEAGUE", "nfl")
 # is far more likely to be stale or mismatched data than free money, so
 # it's dropped rather than shown.
 MAX_SANE_PROFIT_PERCENT = 25.0
+
+# SharpAPI's is_stale_pregame_price flag only covers PREGAME prices - it
+# says nothing about a LIVE row having gone stale (confirmed: a real live
+# soccer "Total Goals" row sat at is_stale_pregame_price=False while showing
+# -155 well after the actual BetRivers line had moved to -560, almost
+# certainly right after a goal - a swing that size only happens in-play).
+# Live odds should refresh within seconds of a game event, so any live row
+# older than this is treated as stale and dropped, using the row's own
+# "timestamp" field since no equivalent live-staleness flag exists.
+MAX_LIVE_ROW_AGE_SECONDS = 30
 
 # Confirmed rate limit: 150 requests/minute. A single-sport scan (one
 # request per selected book) stays cheap; "all sports"/"all leagues" scans
@@ -275,6 +286,33 @@ def _canonical_line(row):
     return -line if row.get("selection_type") == "away" else line
 
 
+def _is_stale_live_row(row, now=None):
+    """True if a LIVE row's own price is too old to trust, using its
+    "timestamp" field - the only freshness signal available for live rows,
+    since is_stale_pregame_price doesn't apply to them (see
+    MAX_LIVE_ROW_AGE_SECONDS above). Non-live rows always return False here;
+    their staleness is covered separately by is_stale_pregame_price.
+
+    A live row with a missing or unparseable timestamp is treated as stale
+    rather than assumed fresh - we can't verify it's current, and showing a
+    fake arb is worse than hiding a real one."""
+    if not row.get("is_live"):
+        return False
+
+    raw_ts = row.get("timestamp")
+    if not raw_ts:
+        return True
+
+    try:
+        ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return True
+
+    now = now or datetime.now(timezone.utc)
+    age_seconds = (now - ts).total_seconds()
+    return age_seconds > MAX_LIVE_ROW_AGE_SECONDS
+
+
 def _legs_form_valid_arb(legs):
     """The non-negotiable rules for what is allowed to be shown as an
     arbitrage opportunity on this site. This tool is arbitrage-only - every
@@ -339,7 +377,10 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     ever entering the "best price" comparison - an old, unrefreshed price
     can otherwise get picked as the "best" price for a side purely because
     it happens to be higher, producing an arb against a number that isn't
-    actually live/bettable anymore.
+    actually live/bettable anymore. That flag only covers PREGAME prices
+    though - a live row is separately checked via _is_stale_live_row(),
+    since a live price can go stale (e.g. right after a goal) with no flag
+    at all marking it as such - see MAX_LIVE_ROW_AGE_SECONDS.
     """
     allowed_books = {_normalize_book(b) for b in (books or SHARPAPI_BOOKS).split(",")}
 
@@ -352,6 +393,8 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         if "player" in (row.get("market_type") or "").lower():
             continue
         if row.get("is_stale_pregame_price"):
+            continue
+        if _is_stale_live_row(row):
             continue
         if not isinstance(row.get("odds_decimal"), (int, float)) or row["odds_decimal"] <= 1:
             continue

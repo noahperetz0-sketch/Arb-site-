@@ -89,6 +89,14 @@ sportsbook apps) before these checks existed. All are covered by
 - **Stale prices are dropped** before ever being compared, using
   SharpAPI's own staleness flag — an old, unrefreshed price can otherwise
   look attractive purely because it hasn't caught up to the real number.
+- **Live prices are separately checked for staleness by age.** SharpAPI's
+  staleness flag only covers pregame prices — a real live soccer "Total
+  Goals" market once showed a BetRivers leg at -155 (flag said not stale)
+  when the actual live line had already moved to -560, almost certainly
+  right after a goal, producing a fake ~20% "arb" that wasn't real (the
+  Place Bet deep link 404'd — the book had already invalidated that quote).
+  Any live row older than 30 seconds is now dropped, using its own
+  timestamp field, since no equivalent "stale live price" flag exists.
 - **A sanity cap on profit** (25%) is applied regardless of source — real
   cross-book arbs are almost always single-digit percentages, so anything
   wildly above that is treated as more likely a data glitch than free

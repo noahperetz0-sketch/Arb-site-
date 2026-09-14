@@ -10,7 +10,15 @@ No test framework dependency on purpose (keeps requirements.txt minimal) -
 plain functions, plain asserts, a runner at the bottom.
 """
 
-from app import compute_arbs_from_odds, _canonical_line, _legs_form_valid_arb
+from datetime import datetime, timedelta, timezone
+
+from app import (
+    compute_arbs_from_odds,
+    _canonical_line,
+    _legs_form_valid_arb,
+    _is_stale_live_row,
+    MAX_LIVE_ROW_AGE_SECONDS,
+)
 
 
 def _row(**overrides):
@@ -29,6 +37,8 @@ def _row(**overrides):
         "is_active": True,
         "is_player_prop": False,
         "is_stale_pregame_price": False,
+        "is_live": False,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "home_team": "Team A",
         "away_team": "Team B",
         "league": "nfl",
@@ -187,6 +197,55 @@ def test_stale_price_is_excluded():
     assert len(arbs) == 0, f"expected 0 arbs (one leg is stale), got {len(arbs)}"
 
 
+def test_stale_live_price_is_excluded():
+    """Bug: real live soccer "Total Goals" data showed BetRivers at -155
+    (is_stale_pregame_price=False, since that flag only covers pregame
+    prices) when the actual live BetRivers line had already moved to -560,
+    almost certainly right after a goal - producing a fake ~20% "arb" that
+    wasn't real (the deep link 404'd - BetRivers had already invalidated
+    that quote). is_stale_pregame_price alone doesn't catch this; only the
+    live-row age check does."""
+    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=MAX_LIVE_ROW_AGE_SECONDS + 60)).isoformat()
+    rows = [
+        _row(event_id="e11", market_type="total_goals", sportsbook="draftkings",
+             selection_type="under", line=1.5, odds_decimal=4.38, odds_american=338,
+             selection="Under", is_live=True),
+        _row(event_id="e11", market_type="total_goals", sportsbook="betrivers",
+             selection_type="over", line=1.5, odds_decimal=1.645, odds_american=-155,
+             selection="Over", is_live=True, is_stale_pregame_price=False, timestamp=stale_ts),
+    ]
+    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,betrivers")
+    assert len(arbs) == 0, f"expected 0 arbs (live leg's price is stale), got {len(arbs)}"
+
+
+def test_fresh_live_arb_is_still_found():
+    """The live-staleness check must not blanket-reject every live arb -
+    only ones with an old timestamp."""
+    rows = [
+        _row(event_id="e12", market_type="total_goals", sportsbook="draftkings",
+             selection_type="under", line=1.5, odds_decimal=2.1, odds_american=110,
+             selection="Under", is_live=True),
+        _row(event_id="e12", market_type="total_goals", sportsbook="betrivers",
+             selection_type="over", line=1.5, odds_decimal=2.05, odds_american=105,
+             selection="Over", is_live=True),
+    ]
+    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,betrivers")
+    assert len(arbs) == 1, f"expected 1 real live arb (both legs fresh), got {len(arbs)}"
+
+
+def test_is_stale_live_row_helper():
+    now = datetime.now(timezone.utc)
+    fresh = _row(is_live=True, timestamp=now.isoformat())
+    stale = _row(is_live=True, timestamp=(now - timedelta(seconds=MAX_LIVE_ROW_AGE_SECONDS + 1)).isoformat())
+    missing_ts = _row(is_live=True, timestamp=None)
+    not_live = _row(is_live=False, timestamp=(now - timedelta(days=1)).isoformat())
+
+    assert _is_stale_live_row(fresh, now=now) is False
+    assert _is_stale_live_row(stale, now=now) is True
+    assert _is_stale_live_row(missing_ts, now=now) is True
+    assert _is_stale_live_row(not_live, now=now) is False
+
+
 def test_legs_form_valid_arb_helper():
     assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "betmgm"}]) is False
     assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "fanduel"}]) is True
@@ -203,6 +262,9 @@ ALL_TESTS = [
     test_mlb_run_line_conflicting_favorite_is_rejected,
     test_mlb_run_line_true_complement_is_found,
     test_stale_price_is_excluded,
+    test_stale_live_price_is_excluded,
+    test_fresh_live_arb_is_still_found,
+    test_is_stale_live_row_helper,
     test_legs_form_valid_arb_helper,
 ]
 
