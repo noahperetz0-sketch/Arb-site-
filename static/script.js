@@ -11,7 +11,10 @@ const sportLeagueNoteEl = document.getElementById("sportLeagueNote");
 const scanScopeNoteEl = document.getElementById("scanScopeNote");
 const liveFilterSelect = document.getElementById("liveFilter");
 
-const AUTO_REFRESH_INTERVAL_MS = 30000;
+// Confirmed rate limit: 150 requests/minute. A normal scan (one book
+// toggled on = one request) at this interval stays well under budget even
+// with all 5 books selected (5 req / 15s = 20 req/min, ~13% of the limit).
+const AUTO_REFRESH_INTERVAL_MS = 15000;
 const PREFERRED_DEFAULT_SPORT = "football";
 const PREFERRED_DEFAULT_LEAGUE = "nfl";
 
@@ -101,7 +104,7 @@ function updateScanScopeState() {
     const scope = currentSport === "all"
       ? "every sport"
       : `all leagues in ${sportSelectEl.options[sportSelectEl.selectedIndex] ? sportSelectEl.options[sportSelectEl.selectedIndex].text : currentSport}`;
-    scanScopeNoteEl.textContent = `Scanning ${scope} means a lot more API requests per refresh — auto-refresh has been turned off so this doesn't run automatically every 30 seconds. Use the Refresh button when you want to re-scan.`;
+    scanScopeNoteEl.textContent = `Scanning ${scope} means one API request per sport per book selected — with your 150 requests/minute limit, a single scan like this can burn through a big chunk of that budget at once. Auto-refresh has been turned off so it doesn't repeat automatically; use the Refresh button when you want to re-scan.`;
     scanScopeNoteEl.hidden = false;
     autoRefreshCheckbox.checked = false;
     autoRefreshCheckbox.disabled = true;

@@ -29,11 +29,18 @@ DEFAULT_LEAGUE = os.environ.get("SHARPAPI_LEAGUE", "nfl")
 # it's dropped rather than shown.
 MAX_SANE_PROFIT_PERCENT = 25.0
 
+# Confirmed rate limit: 150 requests/minute. A single-sport scan (one
+# request per selected book) stays cheap; "all sports"/"all leagues" scans
+# multiply that by however many sports get looped over and can burn a big
+# chunk of the budget in one call (the frontend disables auto-refresh in
+# that mode for exactly this reason).
+SHARPAPI_RATE_LIMIT_PER_MINUTE = 150
+
 # Rows returned per sportsbook per scan. We only read the first page per
-# book rather than following pagination — chasing every page across 5
-# books would burn through the plan's request budget fast, at the cost of
-# only seeing whichever events/markets SharpAPI returns first. Revisit this
-# once you know your plan's actual rate limit.
+# book rather than following pagination — a single event's markets alone
+# can fill 50 rows, so chasing every page across every sport/book would
+# multiply request count unpredictably for a personal tool like this. A
+# deliberate scope limit, not an unknown to revisit.
 ODDS_PAGE_LIMIT = 200
 
 # Short in-memory cache so rapid book-toggle clicks or multiple open tabs
