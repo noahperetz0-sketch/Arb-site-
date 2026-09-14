@@ -15,7 +15,7 @@ SHARPAPI_BASE_URL = os.environ.get("SHARPAPI_BASE_URL", "https://api.sharpapi.io
 # response from SharpAPI's own playground).
 SHARPAPI_BOOKS = os.environ.get(
     "SHARPAPI_BOOKS",
-    "betrivers,fanduel,betmgm,draftkings",
+    "betrivers,fanduel,betmgm,draftkings,betano",
 )
 
 # SharpAPI's /odds endpoint requires a sport+league pair. Override per

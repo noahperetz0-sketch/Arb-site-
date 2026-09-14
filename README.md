@@ -33,10 +33,20 @@ Once you've upgraded to the Hobby plan and have a real API key:
    (Never paste it directly into the code or share it in chat.)
 2. Set `SHARPAPI_BOOKS` to the exact sportsbook ids you picked in your
    SharpAPI dashboard (comma-separated, no spaces) if they ever change —
-   the default in `.env.example` is currently set to just 4 (betrivers,
-   fanduel, betmgm, draftkings). Betano was the intended 5th but is
-   returning no data from SharpAPI (see below); Kalshi was tried as a
-   replacement but isn't usable in Canada, so the list is at 4 for now.
+   the default in `.env.example` is currently set to betrivers, fanduel,
+   betmgm, draftkings, betano.
+
+## Betano has no NFL coverage on this feed
+Betano is confirmed working (real live odds for soccer, tennis, esports,
+basketball), but returns nothing for NFL specifically — not a bug, it
+simply doesn't carry NFL games on this data source. It will only
+contribute to an arb scan for a sport it actually covers, and only when at
+least one of your other selected books covers the same game (your other 4
+books are all US sportsbooks, strongest on NFL/NBA/MLB/NHL — there's real
+mismatch in which sports each book is deep on). If you want Betano to
+actually do something, point `SHARPAPI_SPORT`/`SHARPAPI_LEAGUE` (or the
+`?sport=&league=` query params on `/api/arbs`) at a league Betano and at
+least one other selected book both cover, e.g. soccer.
 3. Restart the site. It will automatically switch from sample data to live data.
 
 ## Deploying so you have a permanent link (Railway example)
