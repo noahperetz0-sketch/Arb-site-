@@ -363,6 +363,7 @@ const TIER_LABELS = { free: "Free", hobby: "Hobby", pro: "Pro", sharp: "Sharp" }
 const BOOK_ISSUE_LABELS = {
   tier_restricted: "needs a higher SharpAPI plan tier",
   book_not_selected: "not enabled in your SharpAPI dashboard's book selection",
+  book_unavailable: "temporarily unavailable on SharpAPI's side",
   rate_limited: "rate limited — try again shortly",
   request_failed: "unreachable",
 };

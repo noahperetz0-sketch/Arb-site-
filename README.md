@@ -68,7 +68,14 @@ To run the regression tests instead of the site: `python tests.py`.
   just plan tier: a book can be within your tier but still return nothing
   if it isn't turned on in your SharpAPI dashboard's own book selection.
   The status line tells the two apart (see `book_issues` above) instead of
-  both just looking like silence. For anything missing entirely (e.g. a
+  both just looking like silence. Worth knowing: SharpAPI also caps how
+  many books can be *simultaneously selected* per tier, separate from
+  which books your tier can reach at all — Free 2, **Hobby 5** (confirmed
+  — this is exactly why this site's plan has 5 books configured, not an
+  arbitrary choice), Pro 15, Sharp 25, Enterprise unlimited. So no matter
+  how many toggles this site shows, only that many can be active on
+  SharpAPI's side at once — switching to a new book means deselecting one
+  of your current ones in the SharpAPI dashboard first. For anything missing entirely (e.g. a
   brand-new addition before either list picks it up), there's also an "Add
   a sportsbook" box in the Sportsbooks panel — type the exact id from your
   SharpAPI dashboard to add a toggle for it immediately. Custom-added books
@@ -80,7 +87,11 @@ To run the regression tests instead of the site: `python tests.py`.
 - **Live/Pre-match filter**: filters the currently-loaded results
   client-side, no extra API call.
 - **Place Bet button**: opens SharpAPI's deep link for that leg on that
-  sportsbook in a new tab, when one is available.
+  sportsbook in a new tab, when one is available. BetMGM, Caesars, and
+  BetRivers have state-dependent deep link domains (confirmed in
+  SharpAPI's docs) — set `SHARPAPI_STATE` to your two-letter state code so
+  those resolve correctly instead of potentially pointing at the wrong
+  state's (or a generic) URL.
 - **$ profit + event start time**: shown on every card alongside the
   percentage, recalculating live as you change your total stake.
 
@@ -103,10 +114,14 @@ sportsbook apps) before these checks existed. All are covered by
   ties, neither actually wins. Every row's line is normalized relative to
   the home team before matching, so only genuine complements pair up.
 - **Player-prop markets are excluded entirely**, checked two ways
-  (SharpAPI's own flag, and independently via the word "player" in the
-  market type) — market type alone doesn't say which player a row is
-  about, and one of the two checks has been seen to fail silently on its
-  own.
+  (SharpAPI's own `is_player_prop` flag, and independently via the word
+  "player" in the market type) — market type alone doesn't say which
+  player a row is about. The flag alone isn't enough: SharpAPI computes it
+  by checking whether `market_type` *starts with* `player_` (confirmed in
+  their own docs), but period/segment-scoped player props are named like
+  `1st_half_player_passing_yards` — "player" appears mid-string after the
+  segment prefix, so the flag reads `false` on every one of them. The
+  substring check is what actually catches those.
 - **Stale prices are dropped** before ever being compared, using
   SharpAPI's own staleness flag — an old, unrefreshed price can otherwise
   look attractive purely because it hasn't caught up to the real number.

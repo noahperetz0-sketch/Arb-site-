@@ -25,6 +25,18 @@ SHARPAPI_BOOKS = os.environ.get(
 DEFAULT_SPORT = os.environ.get("SHARPAPI_SPORT", "football")
 DEFAULT_LEAGUE = os.environ.get("SHARPAPI_LEAGUE", "nfl")
 
+# Confirmed per SharpAPI's own /odds docs: BetMGM, Caesars, and BetRivers
+# have state-dependent deep link URLs - without a ?state= param on the
+# /odds request, their deep_link may point at the wrong state's domain
+# (or a generic one that doesn't resolve). BetRivers is one of this site's
+# 5 plan books and is exactly the book that produced a "Deep link ID not
+# found" error before the live-staleness fix - the missing state param may
+# be a second, independent contributor to the same symptom. Set this to
+# your two-letter state code (e.g. "nj", "ny", "il") if you bet from a
+# state where any of those books operates; leave empty otherwise, and the
+# param is simply omitted.
+SHARPAPI_STATE = os.environ.get("SHARPAPI_STATE", "")
+
 # Real cross-book arbs are almost always single digits. Anything above this
 # is far more likely to be stale or mismatched data than free money, so
 # it's dropped rather than shown.
@@ -71,22 +83,91 @@ _sports_cache = None  # (timestamp, [{"id","name"}])
 _leagues_cache = {}  # sport -> (timestamp, [{"id","name"}])
 
 # Only used if SharpAPI's /sports or /leagues endpoints don't exist or fail -
-# a minimal, honest fallback built only from sport/league ids we've directly
-# confirmed against real API responses, not guessed.
+# transcribed from SharpAPI's own "Sports" docs page ("Available Sports"
+# table - confirmed real sport ids, not guessed). Previously a short list
+# of 6 that was missing baseball entirely despite this app having dedicated,
+# tested MLB matching logic (see tests.py's mlb_run_line tests).
 FALLBACK_SPORTS = [
-    {"id": "football", "name": "Football"},
     {"id": "basketball", "name": "Basketball"},
+    {"id": "football", "name": "Football"},
     {"id": "hockey", "name": "Hockey"},
+    {"id": "baseball", "name": "Baseball"},
     {"id": "soccer", "name": "Soccer"},
     {"id": "tennis", "name": "Tennis"},
+    {"id": "mma", "name": "MMA"},
+    {"id": "golf", "name": "Golf"},
+    {"id": "boxing", "name": "Boxing"},
+    {"id": "cricket", "name": "Cricket"},
+    {"id": "rugby_union", "name": "Rugby Union"},
+    {"id": "rugby_league", "name": "Rugby League"},
+    {"id": "aussie_rules", "name": "Aussie Rules"},
+    {"id": "lacrosse", "name": "Lacrosse"},
+    {"id": "motorsports", "name": "Motorsports"},
+    {"id": "darts", "name": "Darts"},
+    {"id": "snooker", "name": "Snooker"},
+    {"id": "table_tennis", "name": "Table Tennis"},
+    {"id": "volleyball", "name": "Volleyball"},
+    {"id": "handball", "name": "Handball"},
+    {"id": "water_polo", "name": "Water Polo"},
+    {"id": "horse_racing", "name": "Horse Racing"},
+    {"id": "cycling", "name": "Cycling"},
+    {"id": "olympics", "name": "Olympics"},
+    {"id": "politics", "name": "Politics"},
+    {"id": "entertainment", "name": "Entertainment"},
     {"id": "esports", "name": "Esports"},
 ]
 
 # The sports this site's owner actually watches day to day - preselected
-# by default wherever the real sports list includes them.
-PREFERRED_SPORTS = ["basketball", "football", "hockey", "soccer", "tennis"]
+# by default wherever the real sports list includes them. Baseball added
+# alongside this round of doc fixes - this app has dedicated, tested MLB
+# matching logic (tests.py's mlb_run_line tests reference "the actual
+# reported case"), so its absence here looks like an oversight rather than
+# a deliberate exclusion; easy to toggle back off if that's wrong.
+PREFERRED_SPORTS = ["basketball", "football", "hockey", "baseball", "soccer", "tennis"]
+
+# Confirmed real league ids - from SharpAPI's own "Leagues" docs page (the
+# "Common Leagues" reference table) and real response examples embedded in
+# the "Sports" docs page (tennis/boxing/mma/horse_racing's leagues arrays).
+# Not an exhaustive list (soccer alone has 300+ real leagues) - just enough
+# for the "All Leagues" dropdown to have real options if the live call
+# fails, matching the same fallback philosophy as FALLBACK_SPORTS.
 FALLBACK_LEAGUES = {
-    "football": [{"id": "nfl", "name": "NFL"}],
+    "football": [{"id": "nfl", "name": "NFL"}, {"id": "ncaaf", "name": "NCAAF"}],
+    "basketball": [
+        {"id": "nba", "name": "NBA"},
+        {"id": "ncaab", "name": "NCAAB"},
+        {"id": "wnba", "name": "WNBA"},
+    ],
+    "baseball": [{"id": "mlb", "name": "MLB"}],
+    "hockey": [{"id": "nhl", "name": "NHL"}],
+    "soccer": [
+        {"id": "england_-_premier_league", "name": "England - Premier League"},
+        {"id": "spain_-_la_liga", "name": "Spain - La Liga"},
+        {"id": "italy_-_serie_a", "name": "Italy - Serie A"},
+        {"id": "germany_-_bundesliga", "name": "Germany - Bundesliga"},
+        {"id": "france_-_ligue_1", "name": "France - Ligue 1"},
+        {"id": "uefa_-_champions_league", "name": "UEFA - Champions League"},
+        {"id": "usa_-_major_league_soccer", "name": "USA - Major League Soccer"},
+    ],
+    "tennis": [
+        {"id": "atp", "name": "ATP"},
+        {"id": "wta", "name": "WTA"},
+        {"id": "atp_challenger", "name": "ATP Challenger"},
+        {"id": "itf_men", "name": "ITF Men"},
+        {"id": "itf_women", "name": "ITF Women"},
+        {"id": "utr", "name": "UTR"},
+    ],
+    "mma": [{"id": "ufc", "name": "UFC"}],
+    "golf": [
+        {"id": "pga", "name": "PGA"},
+        {"id": "dp_world_tour", "name": "DP World Tour"},
+        {"id": "world_tour", "name": "World Tour"},
+    ],
+    "boxing": [{"id": "boxing_matches", "name": "Boxing Matches"}],
+    "horse_racing": [
+        {"id": "horse", "name": "Horse"},
+        {"id": "horses_daily", "name": "Horses Daily"},
+    ],
 }
 
 # Every sportsbook SharpAPI supports, transcribed directly from SharpAPI's
@@ -366,11 +447,17 @@ def fetch_odds_for_book(sportsbook, sport, league=None, limit=ODDS_PAGE_LIMIT):
 
     league=None omits the league filter entirely (all leagues for this
     sport) rather than falling back to a default - callers that want a
-    specific league must pass one explicitly."""
+    specific league must pass one explicitly.
+
+    Sends ?state=SHARPAPI_STATE when set - confirmed required for correct
+    deep_link resolution on BetMGM/Caesars/BetRivers (state-dependent
+    sportsbook domains); harmless no-op for every other book."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     params = {"sport": sport, "sportsbook": sportsbook, "limit": limit}
     if league:
         params["league"] = league
+    if SHARPAPI_STATE:
+        params["state"] = SHARPAPI_STATE
     resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/odds", headers=headers, params=params, timeout=10)
     resp.raise_for_status()
     return resp.json().get("data", [])
@@ -478,21 +565,25 @@ def _is_stale_live_row(row, now=None):
     MAX_LIVE_ROW_AGE_SECONDS above). Non-live rows always return False here;
     their staleness is covered separately by is_stale_pregame_price.
 
-    Prefers "fetched_at" (per SharpAPI's docs: "when the upstream sportsbook
-    was last polled" - the more precise signal) and falls back to
-    "timestamp" (confirmed present on real rows, but per SharpAPI's own
-    docs it's "the time SharpAPI last refreshed that row through its
-    pipeline... not when the price last moved" - a slightly weaker signal,
-    though still the one this check was built and tested against, since
-    fetched_at hasn't actually been seen on a real row yet).
+    Uses "timestamp" - confirmed the ONLY freshness field on an odds row as
+    of SharpAPI's current API version (their own Odds Delta changelog: "the
+    odds response now carries a single timestamp field... former
+    odds_changed_at, last_seen_at, and wire_received_at fields have been
+    removed"; every detailed schema table since - /odds, /odds/delta,
+    /odds/best, /odds/comparison, /odds/batch, /odds/closing - lists only
+    this field, no "fetched_at" despite an earlier, more general docs page
+    mentioning one). Per SharpAPI's own description it's "the time SharpAPI
+    last refreshed that row through its pipeline... not when the price last
+    moved" - imperfect, but the only signal that exists, and still able to
+    catch the real bug this check was built for (see above).
 
-    A live row with neither field, or an unparseable one, is treated as
-    stale rather than assumed fresh - we can't verify it's current, and
-    showing a fake arb is worse than hiding a real one."""
+    A live row with a missing or unparseable timestamp is treated as stale
+    rather than assumed fresh - we can't verify it's current, and showing a
+    fake arb is worse than hiding a real one."""
     if not row.get("is_live"):
         return False
 
-    raw_ts = row.get("fetched_at") or row.get("timestamp")
+    raw_ts = row.get("timestamp")
     if not raw_ts:
         return True
 
@@ -667,13 +758,15 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
 
 
 def fetch_sports():
-    """Calls SharpAPI's sports-list endpoint - confirmed real per SharpAPI's
-    own docs (GET /api/v1/sports, Free tier, also listed as a public
-    reference endpoint reachable unauthenticated at 10 req/min - we still
-    send the API key for the higher tier-based rate limit). The exact
-    response field names below (id/name/label) are still not independently
-    confirmed for this specific endpoint - kept defensive with multiple
-    fallback keys for that reason."""
+    """Calls SharpAPI's sports-list endpoint - confirmed real and field-
+    checked against SharpAPI's own docs (GET /api/v1/sports, Free tier).
+    Each row's display field is "name" (confirmed, e.g. {"id": "tennis",
+    "name": "Tennis", ...}) - "label" kept only as a defensive fallback,
+    never actually seen on this endpoint. Note: SharpAPI's own Sports docs
+    page says unauthenticated requests get 401, directly contradicting an
+    earlier Authentication docs page that listed this as a public endpoint
+    reachable without a key - a real inconsistency in their docs, but moot
+    for us either way since we always send the API key."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/sports", headers=headers, timeout=10)
     resp.raise_for_status()
@@ -686,9 +779,15 @@ def fetch_sports():
 
 
 def fetch_leagues(sport):
-    """Calls SharpAPI's leagues-list endpoint for one sport - confirmed real
-    per SharpAPI's own docs (GET /api/v1/leagues, Free tier, also a public
-    reference endpoint). Same field-name caveat as fetch_sports()."""
+    """Calls SharpAPI's leagues-list endpoint for one sport - confirmed
+    real and field-checked (GET /api/v1/leagues, Free tier). Each row's
+    display field is "display_name" (confirmed, e.g. {"id": "nba",
+    "display_name": "NBA", ...}) - NOT "label", despite sports using a
+    different field ("name") for the same purpose on its own endpoint.
+    This previously checked "label" before "display_name", which doesn't
+    exist on real league rows at all - every league dropdown entry was
+    silently falling through to the raw id slug (e.g.
+    "england_-_premier_league" instead of "England - Premier League")."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     resp = requests.get(
         f"{SHARPAPI_BASE_URL}/api/v1/leagues", headers=headers, params={"sport": sport}, timeout=10
@@ -696,7 +795,7 @@ def fetch_leagues(sport):
     resp.raise_for_status()
     data = resp.json().get("data", [])
     return [
-        {"id": l.get("id"), "name": l.get("label") or l.get("name") or l.get("id")}
+        {"id": l.get("id"), "name": l.get("display_name") or l.get("label") or l.get("name") or l.get("id")}
         for l in data
         if l.get("id")
     ]
