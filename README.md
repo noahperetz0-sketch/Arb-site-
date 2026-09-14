@@ -1,24 +1,28 @@
 # Arb Screener
 
-A personal website that shows live arbitrage betting opportunities pulled
-from SharpAPI, with an adjustable total-stake calculator.
+A personal website that scans live sportsbook odds via SharpAPI and shows
+you cross-book arbitrage opportunities, with a stake calculator and a
+one-click link to place each leg.
 
 Right now it's running on **sample (fake) data** so you can see how it looks
 and works before connecting your real SharpAPI key.
 
 ## What's in this project
-- `app.py` — the backend. Calls SharpAPI and serves the page.
+- `app.py` — the backend. Calls SharpAPI, matches odds across books into
+  arbitrage opportunities, and serves the page.
+- `tests.py` — regression tests for the arb-matching logic. **Run this
+  (`python tests.py`) before shipping any change to how arbs are matched.**
+  Every test in it is a real bug that was found and fixed — it exists so
+  none of them can quietly come back.
 - `templates/index.html` — the page you see in your browser.
-- `static/style.css` / `static/script.js` — styling and the refresh/stake logic.
+- `static/style.css` / `static/script.js` — styling and all the client-side
+  logic (sport/book toggles, auto-refresh, filters, rendering).
 - `Procfile` — tells Railway (or any Heroku-style host) to run the app with
   `gunicorn` instead of Flask's dev server.
 - `.env.example` — the environment variables the app reads. Copy to `.env`
   for local testing; never commit a real `.env`.
 
-## Running it yourself (optional, for testing)
-You don't need to do this — Claude can deploy it for you — but if you want to
-try it locally:
-
+## Running it yourself
 1. Install Python if you don't have it.
 2. In a terminal, inside this folder, run:
    ```
@@ -27,74 +31,96 @@ try it locally:
    ```
 3. Open `http://localhost:5000` in your browser.
 
+To run the regression tests instead of the site: `python tests.py`.
+
 ## Connecting your real SharpAPI key
-Once you've upgraded to the Hobby plan and have a real API key:
-1. Set an environment variable called `SHARPAPI_KEY` to your key.
-   (Never paste it directly into the code or share it in chat.)
+1. Set an environment variable called `SHARPAPI_KEY` to your key. (Never
+   paste it directly into the code or share it in chat — if it's ever been
+   exposed, e.g. in a screenshot, regenerate it in your SharpAPI dashboard.)
 2. Set `SHARPAPI_BOOKS` to the exact sportsbook ids you picked in your
    SharpAPI dashboard (comma-separated, no spaces) if they ever change —
-   the default in `.env.example` is currently set to betrivers, fanduel,
-   betmgm, draftkings, betano.
+   the default in `.env.example` is betrivers, fanduel, betmgm, draftkings,
+   betano.
+3. Restart the site (or, on Railway, redeploy). It automatically switches
+   from sample data to live data once a key is present.
 
-## Betano has no NFL coverage on this feed
-Betano is confirmed working (real live odds for soccer, tennis, esports,
-basketball), but returns nothing for NFL specifically — not a bug, it
-simply doesn't carry NFL games on this data source. It will only
-contribute to an arb scan for a sport it actually covers, and only when at
-least one of your other selected books covers the same game (your other 4
-books are all US sportsbooks, strongest on NFL/NBA/MLB/NHL — there's real
-mismatch in which sports each book is deep on). If you want Betano to
-actually do something, point `SHARPAPI_SPORT`/`SHARPAPI_LEAGUE` (or the
-`?sport=&league=` query params on `/api/arbs`) at a league Betano and at
-least one other selected book both cover, e.g. soccer.
-3. Restart the site. It will automatically switch from sample data to live data.
-
-## Deploying so you have a permanent link (Railway example)
-1. Create a free account at railway.app
-2. Create a "New Project" → "Deploy from GitHub repo" (or use their CLI to
-   upload this folder directly)
-3. In the project's "Variables" tab, add `SHARPAPI_KEY` (and `SHARPAPI_BOOKS`
-   if needed) — this keeps it secret and off your screen/chat entirely
-4. Railway will detect the `Procfile` and run the app with gunicorn
-   automatically
-5. Railway will give you a public URL like `your-app.up.railway.app` —
-   bookmark that and you're done
+## What the site actually does
+- **Sport/league selection**: toggle any combination of sports on the
+  homepage. Checking more than one sport scans every league within each of
+  them (a single league picker doesn't make sense across different
+  sports); checking exactly one sport reveals a League dropdown, including
+  an "All Leagues" option. Checking 2+ sports multiplies the number of API
+  requests per scan, so auto-refresh automatically disables itself in that
+  mode with an explanation — use the Refresh button manually instead.
+- **Sportsbook toggles**: pick which of your books to scan. Enforced twice
+  — sent to SharpAPI's filter, and independently re-checked on every
+  returned leg, so a book you didn't select can never appear in a result
+  even if SharpAPI's own filter is ignored or misparsed.
+- **Live/Pre-match filter**: filters the currently-loaded results
+  client-side, no extra API call.
+- **Place Bet button**: opens SharpAPI's deep link for that leg on that
+  sportsbook in a new tab, when one is available.
+- **$ profit + event start time**: shown on every card alongside the
+  percentage, recalculating live as you change your total stake.
 
 ## How data accuracy is enforced
-- **Book selection is enforced twice.** The sportsbook toggles are sent to
-  SharpAPI's own filter, but the backend also re-checks every returned arb's
-  legs client-side — if SharpAPI ever ignores or misparses that filter
-  param, an arb involving a book you didn't select is dropped rather than
-  shown as something you could actually bet.
-- **Stale/suspicious arbs are filtered out.** Any opportunity SharpAPI flags
-  as `possibly_stale` or with a `SUSPICIOUS`/`STALE` warning is dropped.
-- **A sanity cap on profit is applied regardless of source.** Real cross-book
-  arbs are almost always single-digit percentages; anything above 25% is
-  filtered out as a near-certain sign of a data glitch rather than real
-  free money — whether it came from SharpAPI's pre-computed endpoint or the
-  free-tier fallback scan below.
-- **Free-tier fallback only scans complete markets.** If your API key isn't
-  on a tier where the arbitrage endpoint is available, the backend instead
-  pulls full odds for each event (every book, every selection for that
-  market) and computes arbs itself — never from a partial/paginated slice,
-  since missing outcomes can make a market look falsely profitable.
+This is the part that's mattered most in practice — SharpAPI's raw odds
+data has real inconsistencies between sports and books, and several bugs
+were found (via real prices caught mismatched against the actual
+sportsbook apps) before these checks existed. All are covered by
+`tests.py`.
+
+- **Every leg of an arb must be a different sportsbook.** If only one book
+  has data for a market, "best price per side" would trivially come from
+  that same book on both sides — not a real hedge, and not something you
+  could actually place (the book would notice and void/limit it).
+- **Spread-market legs must be true complements, not just matching
+  magnitude.** Two books can each list their own team as favored by the
+  same amount for the same market (e.g. one book has the home team -0.5,
+  another independently has the away team -0.5) — both are "my team wins
+  outright" bets, not opposite sides of one proposition. If the segment
+  ties, neither actually wins. Every row's line is normalized relative to
+  the home team before matching, so only genuine complements pair up.
+- **Player-prop markets are excluded entirely**, checked two ways
+  (SharpAPI's own flag, and independently via the word "player" in the
+  market type) — market type alone doesn't say which player a row is
+  about, and one of the two checks has been seen to fail silently on its
+  own.
+- **Stale prices are dropped** before ever being compared, using
+  SharpAPI's own staleness flag — an old, unrefreshed price can otherwise
+  look attractive purely because it hasn't caught up to the real number.
+- **A sanity cap on profit** (25%) is applied regardless of source — real
+  cross-book arbs are almost always single-digit percentages, so anything
+  wildly above that is treated as more likely a data glitch than free
+  money and dropped rather than shown.
+- **Book selection and sport/league scope are enforced server-side**,
+  independent of whatever SharpAPI's own query filters actually do.
 - **A short server-side cache (8s)** prevents rapid toggle-clicking or
-  multiple open tabs from burning through the API's rate limit.
+  multiple open tabs from burning through the API's rate limit
+  (confirmed: 150 requests/minute).
 
 ## A note on the SharpAPI integration
-The endpoint paths in `app.py` (`/api/v1/opportunities/arbitrage`,
-`/api/v1/sportsbooks`, `/api/v1/events`, `/api/v1/events/{id}/odds`) and the
-response field names match SharpAPI's publicly documented Python SDK and
-marketing site. If your key returns a 404 on `/api/arbs`, hit
-`/api/test-odds` first to confirm the key itself works against the simpler
-`/api/v1/odds` endpoint, then send Claude the exact response body — the
-`fetch_arbs_paid`/`fetch_events`/`fetch_event_odds` functions are the only
-places that need adjusting if a path is off.
+The confirmed-real endpoint is `/api/v1/odds` (sport + optional league +
+sportsbook), which is what all arb-matching is actually built on. A
+pre-computed `/api/v1/opportunities/arbitrage` endpoint is attempted first
+as a bonus (documented in SharpAPI's marketing material, but never
+confirmed to actually exist — no "Opportunities" tab has ever shown up in
+SharpAPI's own playground) and falls back to the confirmed `/odds`-based
+matching on any failure. `/api/v1/sports` and `/api/v1/leagues` (for the
+sport/league dropdowns) are similarly unconfirmed and fall back to a small
+hardcoded list on failure.
 
-## Notes
-- The stake calculator uses the `stake_percent` SharpAPI provides for each leg
-  of an arb — that percentage split stays the same no matter your total stake,
-  so changing the "Total stake" box just recalculates dollar amounts instantly.
-- Auto-refresh (every 30s) can be toggled off from the header, and pauses
-  automatically while the browser tab isn't visible so it doesn't burn API
-  calls in the background.
+If something looks wrong, `/api/test-odds` is a diagnostic route that
+confirms whether the API key and sport/league params work at all against
+the confirmed `/odds` endpoint.
+
+## Deploying (Railway example)
+1. Create a free account at railway.app
+2. "New Project" → "Deploy from GitHub repo", pointing at this repo's
+   branch
+3. In the project's "Variables" tab, add `SHARPAPI_KEY` (and `SHARPAPI_BOOKS`
+   if needed)
+4. Railway detects the `Procfile` and runs the app with gunicorn
+   automatically
+5. Under Settings → Networking, "Generate Domain" for a public URL
+6. Enable auto-deploy on the branch so future pushes redeploy automatically
