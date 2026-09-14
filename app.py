@@ -204,7 +204,7 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
     mean parsing player names out of free-text selection strings — too
     fragile to trust with real money.
     """
-    allowed_books = {_normalize_book(b) for b in books.split(",")} if books else None
+    allowed_books = {_normalize_book(b) for b in (books or SHARPAPI_BOOKS).split(",")}
 
     markets = {}
     for row in rows:
@@ -328,9 +328,9 @@ def api_arbs():
 
     if arbs is None:
         try:
-            books_list = (selected_books or SHARPAPI_BOOKS).split(",")
-            rows = fetch_all_odds(books_list, sport=sport, league=league)
-            arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=selected_books)
+            resolved_books = selected_books or SHARPAPI_BOOKS
+            rows = fetch_all_odds(resolved_books.split(","), sport=sport, league=league)
+            arbs = compute_arbs_from_odds(rows, min_profit=0.0, books=resolved_books)
             mode = "odds_scan"
         except Exception as e:
             return jsonify({"source": "error", "error": str(e), "arbs": MOCK_ARBS}), 200
