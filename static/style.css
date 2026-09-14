@@ -109,6 +109,55 @@ button#refreshBtn:disabled {
   cursor: default;
 }
 
+.sport-header {
+  margin-bottom: 8px;
+}
+
+.sport-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.sport-panel select,
+.sport-panel input[type="text"] {
+  padding: 8px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.sport-panel select:focus,
+.sport-panel input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.custom-sport-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.custom-sport-fields input[type="text"] {
+  width: 140px;
+}
+
+.custom-sport-fields button {
+  padding: 8px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .books-header {
   display: flex;
   align-items: center;

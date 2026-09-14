@@ -23,6 +23,22 @@
       </div>
     </header>
 
+    <div class="sport-header">
+      <span class="books-title">Sport / League</span>
+    </div>
+    <div class="sport-panel">
+      <select id="sportPreset">
+        <option value="football:nfl">Football (NFL)</option>
+        <option value="basketball:nba">Basketball (NBA) — unverified league id</option>
+        <option value="custom">Custom…</option>
+      </select>
+      <div id="customSportFields" class="custom-sport-fields" hidden>
+        <input type="text" id="customSport" placeholder="sport (e.g. soccer)" />
+        <input type="text" id="customLeague" placeholder="league (e.g. epl)" />
+        <button id="applyCustomSportBtn" type="button">Apply</button>
+      </div>
+    </div>
+
     <div class="books-header">
       <span class="books-title">Sportsbooks</span>
       <button id="toggleAllBtn" class="toggle-all-btn" type="button" style="display: none;">Select All</button>

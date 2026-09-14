@@ -5,6 +5,11 @@ const statusEl = document.getElementById("status");
 const booksPanelEl = document.getElementById("booksPanel");
 const toggleAllBtn = document.getElementById("toggleAllBtn");
 const autoRefreshCheckbox = document.getElementById("autoRefresh");
+const sportPresetSelect = document.getElementById("sportPreset");
+const customSportFieldsEl = document.getElementById("customSportFields");
+const customSportInput = document.getElementById("customSport");
+const customLeagueInput = document.getElementById("customLeague");
+const applyCustomSportBtn = document.getElementById("applyCustomSportBtn");
 
 const AUTO_REFRESH_INTERVAL_MS = 30000;
 
@@ -13,6 +18,8 @@ let allBooks = [];          // [{id, display_name}, ...]
 let selectedBookIds = new Set();
 let isLoading = false;
 let autoRefreshTimer = null;
+let currentSport = "football";
+let currentLeague = "nfl";
 
 async function loadBooks() {
   try {
@@ -95,8 +102,12 @@ async function loadArbs() {
   if (currentArbs.length) arbListEl.classList.add("is-refreshing");
 
   try {
-    const booksParam = `?books=${Array.from(selectedBookIds).join(",")}`;
-    const res = await fetch(`/api/arbs${booksParam}`);
+    const params = new URLSearchParams({
+      books: Array.from(selectedBookIds).join(","),
+      sport: currentSport,
+      league: currentLeague,
+    });
+    const res = await fetch(`/api/arbs?${params}`);
     const data = await res.json();
     currentArbs = data.arbs || [];
 
@@ -192,6 +203,32 @@ document.addEventListener("visibilitychange", () => {
     loadArbs();
     startAutoRefresh();
   }
+});
+
+function setSportLeague(sport, league) {
+  currentSport = sport;
+  currentLeague = league;
+  loadArbs();
+}
+
+sportPresetSelect.addEventListener("change", () => {
+  const value = sportPresetSelect.value;
+  if (value === "custom") {
+    customSportInput.value = currentSport;
+    customLeagueInput.value = currentLeague;
+    customSportFieldsEl.hidden = false;
+    return;
+  }
+  customSportFieldsEl.hidden = true;
+  const [sport, league] = value.split(":");
+  setSportLeague(sport, league);
+});
+
+applyCustomSportBtn.addEventListener("click", () => {
+  const sport = customSportInput.value.trim().toLowerCase();
+  const league = customLeagueInput.value.trim().toLowerCase();
+  if (!sport || !league) return;
+  setSportLeague(sport, league);
 });
 
 refreshBtn.addEventListener("click", loadArbs);
