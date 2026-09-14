@@ -56,15 +56,19 @@ To run the regression tests instead of the site: `python tests.py`.
   — sent to SharpAPI's filter, and independently re-checked on every
   returned leg, so a book you didn't select can never appear in a result
   even if SharpAPI's own filter is ignored or misparsed. Beyond the 5 books
-  in `SHARPAPI_BOOKS`, a broader catalog of common sportsbook ids
-  (`CANDIDATE_SPORTSBOOKS` in `app.py`) is offered unchecked — these are
-  *not* individually confirmed against SharpAPI, so toggling one on only
-  works once it's actually active on your plan. Since your SharpAPI plan's
-  book selection changes over time, there's also an "Add a sportsbook" box
-  in the Sportsbooks panel — type the exact id from your SharpAPI dashboard
-  to add a toggle for it immediately, no code change or redeploy needed.
-  Custom-added books and your current toggle selections are both
-  remembered in the browser (localStorage) across visits.
+  in `SHARPAPI_BOOKS`, every other sportsbook SharpAPI documents
+  (`SPORTSBOOK_CATALOG` in `app.py`, ~40 books — transcribed directly from
+  SharpAPI's own "Supported Sportsbooks" docs page, not guessed) is offered
+  as an unchecked toggle, tagged with the SharpAPI plan tier it requires
+  (Free/Hobby/Pro/Sharp). Toggling one on only pulls data once it's active
+  on your current plan — a book above your plan's tier just returns
+  nothing for that toggle, same as any book you haven't enabled at all.
+  For anything not in that list (a brand-new SharpAPI addition), there's
+  also an "Add a sportsbook" box in the Sportsbooks panel — type the exact
+  id from your SharpAPI dashboard to add a toggle for it immediately, no
+  code change or redeploy needed. Custom-added books and your current
+  toggle selections are both remembered in the browser (localStorage)
+  across visits.
 - **Sports and Sportsbooks panels collapse independently** of each other
   and of the outer Filters panel, so you can close one while working on
   the other instead of everything competing for space at once.

@@ -369,6 +369,19 @@ button#refreshBtn:disabled {
   cursor: pointer;
 }
 
+.book-tier-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: rgba(154, 161, 172, 0.15);
+  color: var(--muted);
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+
 .filter-row {
   margin-bottom: 12px;
 }

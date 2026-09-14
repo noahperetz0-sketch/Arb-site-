@@ -83,48 +83,65 @@ FALLBACK_LEAGUES = {
     "football": [{"id": "nfl", "name": "NFL"}],
 }
 
-BOOK_DISPLAY_NAMES = {
-    "draftkings": "DraftKings",
-    "fanduel": "FanDuel",
-    "betmgm": "BetMGM",
-    "betrivers": "BetRivers",
-    "betano": "Betano",
-    "caesars": "Caesars",
-    "pointsbet": "PointsBet",
-    "wynnbet": "WynnBET",
-    "bovada": "Bovada",
-    "bet365": "Bet365",
-    "unibet": "Unibet",
-    "williamhill": "William Hill",
-    "foxbet": "FOX Bet",
-    "superbook": "SuperBook",
-    "twinspires": "TwinSpires",
-    "hardrock": "Hard Rock Bet",
-    "espnbet": "ESPN BET",
-    "fanatics": "Fanatics Sportsbook",
-    "betfred": "Betfred",
-    "circa": "Circa Sports",
-    "betparx": "betPARX",
-    "tipico": "Tipico",
-    "pinnacle": "Pinnacle",
-    "bookmaker": "BookMaker",
-    "betonline": "BetOnline",
-}
-
-# A best-effort list of other real-world sportsbook ids to offer as toggles,
-# beyond whatever's in SHARPAPI_BOOKS. Unlike SHARPAPI_BOOKS, these are NOT
-# individually confirmed against a live SharpAPI response - if you toggle
-# one on and it contributes nothing, that almost certainly means it's not
-# active on your current SharpAPI plan/feed, not a bug here. This exists so
-# switching books on your SharpAPI plan doesn't require an env var change
-# and redeploy - just toggle it on here. Anything missing from this list
-# entirely can still be added by exact id from the "Add a sportsbook" box
-# in the UI itself.
-CANDIDATE_SPORTSBOOKS = [
-    "caesars", "pointsbet", "wynnbet", "bovada", "bet365", "unibet",
-    "williamhill", "foxbet", "superbook", "twinspires", "hardrock",
-    "espnbet", "fanatics", "betfred", "circa", "betparx", "tipico",
-    "pinnacle", "bookmaker", "betonline",
+# Every sportsbook SharpAPI supports, transcribed directly from SharpAPI's
+# own "Supported Sportsbooks" docs page (confirmed, not guessed) - Major US,
+# Sharp, International, Exchange, and Prediction Market books. `tier` is the
+# minimum SharpAPI plan tier required to actually pull odds from that book
+# ("free" < "hobby" < "pro" < "sharp") - toggling on a book above your
+# current plan's tier returns nothing, same as a book your plan just
+# doesn't cover, not a site bug. Ids are stored exactly as documented and
+# must never be reformatted - most are clean lowercase, but "Bet365 US" is
+# genuinely a space + capital letters.
+SPORTSBOOK_CATALOG = [
+    # Major US
+    {"id": "draftkings", "display_name": "DraftKings", "tier": "free"},
+    {"id": "fanduel", "display_name": "FanDuel", "tier": "free"},
+    {"id": "ballybet", "display_name": "Bally Bet", "tier": "hobby"},
+    {"id": "Bet365 US", "display_name": "Bet365 US", "tier": "hobby"},
+    {"id": "betmgm", "display_name": "BetMGM", "tier": "hobby"},
+    {"id": "betonline", "display_name": "BetOnline", "tier": "hobby"},
+    {"id": "betparx", "display_name": "betPARX", "tier": "hobby"},
+    {"id": "betrivers", "display_name": "BetRivers", "tier": "hobby"},
+    {"id": "bovada", "display_name": "Bovada", "tier": "hobby"},
+    {"id": "caesars", "display_name": "Caesars", "tier": "hobby"},
+    {"id": "fanatics", "display_name": "Fanatics", "tier": "hobby"},
+    {"id": "fanatics_markets", "display_name": "Fanatics Markets", "tier": "hobby"},
+    {"id": "fliff", "display_name": "Fliff", "tier": "hobby"},
+    {"id": "gemini", "display_name": "Gemini", "tier": "hobby"},
+    {"id": "novig", "display_name": "Novig", "tier": "hobby"},
+    {"id": "rebet", "display_name": "Rebet", "tier": "hobby"},
+    {"id": "robinhood", "display_name": "Robinhood", "tier": "hobby"},
+    {"id": "sportzino", "display_name": "Sportzino", "tier": "hobby"},
+    {"id": "thescorebet", "display_name": "theScore Bet", "tier": "hobby"},
+    {"id": "thrillzz", "display_name": "Thrillzz", "tier": "hobby"},
+    {"id": "underdog", "display_name": "Underdog Fantasy", "tier": "hobby"},
+    # Sharp
+    {"id": "onexbet", "display_name": "1xBet", "tier": "sharp"},
+    {"id": "circa", "display_name": "Circa Sports", "tier": "sharp"},
+    {"id": "pinnacle", "display_name": "Pinnacle", "tier": "sharp"},
+    {"id": "sbobet", "display_name": "SBOBET", "tier": "sharp"},
+    # International
+    {"id": "betano", "display_name": "Betano", "tier": "hobby"},
+    {"id": "betway", "display_name": "Betway", "tier": "hobby"},
+    {"id": "bwin", "display_name": "bwin", "tier": "hobby"},
+    {"id": "coral", "display_name": "Coral", "tier": "hobby"},
+    {"id": "galera", "display_name": "Galera.bet", "tier": "hobby"},
+    {"id": "goldrush", "display_name": "Goldrush", "tier": "hobby"},
+    {"id": "ladbrokes", "display_name": "Ladbrokes", "tier": "hobby"},
+    {"id": "matchbook", "display_name": "Matchbook", "tier": "hobby"},
+    {"id": "paddypower", "display_name": "Paddy Power", "tier": "hobby"},
+    {"id": "skybet", "display_name": "Sky Bet", "tier": "hobby"},
+    {"id": "smarkets", "display_name": "Smarkets", "tier": "hobby"},
+    {"id": "stake", "display_name": "Stake", "tier": "hobby"},
+    {"id": "sx_bet", "display_name": "SX Bet", "tier": "hobby"},
+    {"id": "unibet", "display_name": "Unibet", "tier": "hobby"},
+    {"id": "saba", "display_name": "SABA", "tier": "pro"},
+    # Exchanges
+    {"id": "betfair", "display_name": "Betfair", "tier": "sharp"},
+    {"id": "prophetx", "display_name": "ProphetX", "tier": "sharp"},
+    # Prediction Markets
+    {"id": "kalshi", "display_name": "Kalshi", "tier": "hobby"},
+    {"id": "polymarket", "display_name": "Polymarket", "tier": "hobby"},
 ]
 
 
@@ -136,28 +153,36 @@ def _normalize_book(name):
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 
+_CATALOG_BY_NORMALIZED_ID = {_normalize_book(b["id"]): b for b in SPORTSBOOK_CATALOG}
+
+
 def _book_display_name(book_id):
-    return BOOK_DISPLAY_NAMES.get(book_id, book_id.title())
+    entry = _CATALOG_BY_NORMALIZED_ID.get(_normalize_book(book_id))
+    return entry["display_name"] if entry else book_id.title()
 
 
 def _book_catalog():
     """Every sportsbook toggle offered in the UI: the plan-configured books
-    from SHARPAPI_BOOKS first (confirmed real, "preselected" so they're
-    checked by default), then CANDIDATE_SPORTSBOOKS for anything not
-    already covered (unconfirmed, unchecked by default - the user turns
-    one on once it's actually active on their SharpAPI plan). A candidate
-    id that's also in SHARPAPI_BOOKS is skipped to avoid listing it twice."""
+    from SHARPAPI_BOOKS first (confirmed real, checked by default), then
+    every other book in SPORTSBOOK_CATALOG - SharpAPI's full documented
+    list - unchecked by default. A catalog id already covered by
+    SHARPAPI_BOOKS is skipped to avoid listing it twice."""
     plan_books = [b.strip() for b in SHARPAPI_BOOKS.split(",") if b.strip()]
     plan_ids = {_normalize_book(b) for b in plan_books}
 
     catalog = [
-        {"id": b, "display_name": _book_display_name(b), "preselected": True}
+        {"id": b, "display_name": _book_display_name(b), "tier": None, "preselected": True}
         for b in plan_books
     ]
-    for b in CANDIDATE_SPORTSBOOKS:
-        if _normalize_book(b) in plan_ids:
+    for b in SPORTSBOOK_CATALOG:
+        if _normalize_book(b["id"]) in plan_ids:
             continue
-        catalog.append({"id": b, "display_name": _book_display_name(b), "preselected": False})
+        catalog.append({
+            "id": b["id"],
+            "display_name": b["display_name"],
+            "tier": b.get("tier"),
+            "preselected": False,
+        })
     return catalog
 
 

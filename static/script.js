@@ -351,6 +351,14 @@ async function loadBooks() {
   }
 }
 
+const TIER_LABELS = { free: "Free", hobby: "Hobby", pro: "Pro", sharp: "Sharp" };
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str == null ? "" : String(str);
+  return div.innerHTML;
+}
+
 function renderBooksPanel() {
   if (!allBooks.length) {
     booksPanelEl.innerHTML = "";
@@ -362,16 +370,21 @@ function renderBooksPanel() {
   booksPanelEl.innerHTML = allBooks
     .map((b) => {
       const checked = selectedBookIds.has(b.id) ? "checked" : "";
+      const name = escapeHtml(b.display_name);
+      // Lets you see at a glance why a toggled-on book might return
+      // nothing - it needs a higher SharpAPI plan tier than you're on.
+      const tierLabel = b.tier ? TIER_LABELS[b.tier] || b.tier : null;
+      const labelTitle = tierLabel ? ` title="Requires ${escapeHtml(tierLabel)} tier or higher on SharpAPI"` : "";
       // The remove (x) button is a sibling of the label, not nested inside
       // it - nesting a button inside a <label> wrapping a checkbox causes
       // browsers to double-toggle the checkbox when the button is clicked.
       const removeBtn = b.custom
-        ? `<button type="button" class="book-remove-btn" data-remove-book-id="${b.id}" title="Remove ${b.display_name}" aria-label="Remove ${b.display_name}">&times;</button>`
+        ? `<button type="button" class="book-remove-btn" data-remove-book-id="${escapeHtml(b.id)}" title="Remove ${name}" aria-label="Remove ${name}">&times;</button>`
         : "";
       return `
-        <label class="book-toggle">
-          <input type="checkbox" data-book-id="${b.id}" ${checked} />
-          ${b.display_name}
+        <label class="book-toggle"${labelTitle}>
+          <input type="checkbox" data-book-id="${escapeHtml(b.id)}" ${checked} />
+          ${name}${tierLabel ? `<span class="book-tier-badge">${escapeHtml(tierLabel)}</span>` : ""}
         </label>${removeBtn}
       `;
     })
