@@ -51,6 +51,22 @@ MAX_SANE_PROFIT_PERCENT = 25.0
 # Live odds should refresh within seconds of a game event, so any live row
 # older than this is treated as stale and dropped, using the row's own
 # "timestamp" field since no equivalent live-staleness flag exists.
+#
+# Honest limitation, confirmed by SharpAPI's own docs (Live vs Pre-Match /
+# The timestamp field): this catches a row SharpAPI's pipeline hasn't
+# recently re-touched (the BetRivers bug above), but it CANNOT catch the
+# separate risk that a poll-based book's own collection lag has it behind
+# real-world reality even on a "fresh" row - timestamp advances every
+# ingest cycle whether or not the underlying price actually changed, so a
+# 3-second-old timestamp only proves SharpAPI re-confirmed the price 3
+# seconds ago, not that the book's own price reflects the current game
+# state. Confirmed real numbers: DraftKings' book-to-SharpAPI collection
+# latency alone is ~8s p50 / ~21s p95 (HTTP polling); BetMGM/Caesars/
+# BetRivers/Betano are the same poll-based pattern. Only Pinnacle-tier
+# (MQTT push, p50 ~0.8s) fully closes this gap, and that needs Sharp tier
+# ($399/mo) - well above this site's Hobby plan. No threshold value here
+# fixes this; it's a real, currently-irreducible risk on the softbook-only
+# side of arb detection, not a bug to chase further.
 MAX_LIVE_ROW_AGE_SECONDS = 10
 
 # Confirmed per SharpAPI's own docs (Tier Comparison / Subscription Tiers
@@ -582,6 +598,28 @@ def fetch_all_odds_for_sports(books, sports, league=None):
     return all_rows, book_issues
 
 
+def _canonical_event_id(event_id):
+    """Strips a trailing doubleheader suffix (_g{N}) from a canonical
+    event_id - confirmed by SharpAPI's own Event Matching docs as the safe
+    "same-fixture collapse": event_id is built from
+    {league}_{teamA}_{teamB}_{date}_b{N} (a 6-hour start-time bucket), with
+    an optional trailing _g{N} added only when a book reports both games
+    of a same-day doubleheader in one update. A book that only sees one of
+    the two games emits the bare bucketed id - so the SAME physical game
+    can carry two different event_id strings across books, and grouping
+    strictly by raw event_id (the previous behavior here) could silently
+    miss a real cross-book arb whenever that split happens to occur.
+
+    Only strips _g{N}, never the _b{N} bucket - SharpAPI's own docs
+    explicitly warn that also stripping _b{N} ("loose matchup grouping")
+    can collapse a genuine same-day doubleheader into one group, which
+    would be actively dangerous here: a fake arb pairing legs from two
+    different games. This narrower stripping is what SharpAPI says
+    "mirrors the server-side same-event predicate" - i.e. the same
+    normalization their own cross-book endpoints use internally."""
+    return re.sub(r"_g\d+$", "", event_id or "")
+
+
 def _canonical_line(row):
     """Normalizes a spread row's line to be relative to the HOME team,
     regardless of which side (home or away) this particular row represents.
@@ -750,6 +788,7 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         market_type = row.get("market_type")
         if not event_id or not market_type:
             continue
+        event_id = _canonical_event_id(event_id)
 
         line_key = _canonical_line(row)
 

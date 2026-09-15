@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from app import (
     compute_arbs_from_odds,
     _canonical_line,
+    _canonical_event_id,
     _legs_form_valid_arb,
     _is_stale_live_row,
     MAX_LIVE_ROW_AGE_SECONDS,
@@ -246,6 +247,33 @@ def test_is_stale_live_row_helper():
     assert _is_stale_live_row(not_live, now=now) is False
 
 
+def test_doubleheader_suffix_reunited_across_books():
+    """Bug: SharpAPI's own Event Matching docs confirm the SAME physical
+    doubleheader game can carry two different event_id strings across
+    books - one book reports both games of a same-day doubleheader in one
+    update (getting the _g{N}-suffixed id), another sees only one game
+    (getting the bare bucketed id). Grouping strictly by raw event_id
+    would silently miss a real cross-book arb whenever that split occurs."""
+    rows = [
+        _row(event_id="mlb_athletics_mariners_2026-05-02_b0", sportsbook="draftkings",
+             selection_type="home", odds_decimal=2.0, odds_american=100, selection="A"),
+        _row(event_id="mlb_athletics_mariners_2026-05-02_b0_g1", sportsbook="fanduel",
+             selection_type="away", odds_decimal=2.2, odds_american=120, selection="B"),
+    ]
+    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,fanduel")
+    assert len(arbs) == 1, f"expected the doubleheader-suffix split to be reunited into 1 arb, got {len(arbs)}"
+
+
+def test_canonical_event_id_helper():
+    assert _canonical_event_id("mlb_athletics_mariners_2026-05-02_b0_g1") == "mlb_athletics_mariners_2026-05-02_b0"
+    assert _canonical_event_id("mlb_athletics_mariners_2026-05-02_b0") == "mlb_athletics_mariners_2026-05-02_b0"
+    assert _canonical_event_id("nba_celtics_lakers_2026-02-08_b3") == "nba_celtics_lakers_2026-02-08_b3"
+    assert _canonical_event_id(None) == ""
+    # Never strips the start-time bucket itself (_b{N}) - only a trailing
+    # doubleheader suffix (_g{N}) that comes after it.
+    assert _canonical_event_id("mlb_athletics_mariners_2026-05-02_b0") != "mlb_athletics_mariners_2026-05-02"
+
+
 def test_legs_form_valid_arb_helper():
     assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "betmgm"}]) is False
     assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "fanduel"}]) is True
@@ -265,6 +293,8 @@ ALL_TESTS = [
     test_stale_live_price_is_excluded,
     test_fresh_live_arb_is_still_found,
     test_is_stale_live_row_helper,
+    test_doubleheader_suffix_reunited_across_books,
+    test_canonical_event_id_helper,
     test_legs_form_valid_arb_helper,
 ]
 

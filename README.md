@@ -137,6 +137,26 @@ sportsbook apps) before these checks existed. All are covered by
   Place Bet deep link 404'd — the book had already invalidated that quote).
   Any live row older than 10 seconds is now dropped, using its own
   timestamp field, since no equivalent "stale live price" flag exists.
+  Confirmed honest limitation (SharpAPI's own docs): this catches a row
+  the pipeline hasn't recently re-touched, but can't catch a poll-based
+  book (DraftKings, BetMGM, Caesars, BetRivers, Betano — all this site's
+  plan books) being behind real-world reality even on a "fresh" row —
+  `timestamp` advances every ingest cycle regardless of whether the
+  underlying price changed. DraftKings' own book-to-SharpAPI collection
+  lag alone is ~8s p50 / ~21s p95. Only Pinnacle (push-based, Sharp tier,
+  $399/mo) closes this gap, which is above this site's plan — a real,
+  currently-irreducible risk on the softbook-only side of live detection.
+- **Cross-book event matching handles a doubleheader-suffix split.**
+  SharpAPI's own canonical `event_id` can differ for the *same* physical
+  game across books — one book reports both games of a same-day
+  doubleheader in one update (getting a `_g{N}`-suffixed id), another
+  sees only one game (getting the bare id). Grouping strictly by raw
+  `event_id` would silently miss a real arb whenever that split occurs.
+  Fixed by stripping only the trailing `_g{N}` suffix before grouping —
+  confirmed by SharpAPI's own docs as safe ("mirrors the server-side
+  same-event predicate"), unlike also stripping the `_b{N}` start-time
+  bucket, which they explicitly warn can merge two genuinely different
+  same-day games into one — actively dangerous for arb detection.
 - **A sanity cap on profit** (25%) is applied regardless of source — real
   cross-book arbs are almost always single-digit percentages, so anything
   wildly above that is treated as more likely a data glitch than free
