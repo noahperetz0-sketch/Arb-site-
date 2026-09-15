@@ -221,7 +221,9 @@ function renderSportsPanel() {
   }
   toggleAllSportsBtn.style.display = "inline-block";
 
-  sportsPanelEl.innerHTML = allSports
+  const sortedSports = [...allSports].sort((a, b) => a.name.localeCompare(b.name));
+
+  sportsPanelEl.innerHTML = sortedSports
     .map((s) => {
       const checked = selectedSportIds.has(s.id) ? "checked" : "";
       return `
@@ -417,7 +419,9 @@ function renderBooksPanel() {
   }
   toggleAllBtn.style.display = "inline-block";
 
-  booksPanelEl.innerHTML = allBooks
+  const sortedBooks = [...allBooks].sort((a, b) => a.display_name.localeCompare(b.display_name));
+
+  booksPanelEl.innerHTML = sortedBooks
     .map((b) => {
       const checked = selectedBookIds.has(b.id) ? "checked" : "";
       const name = escapeHtml(b.display_name);
