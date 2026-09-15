@@ -388,6 +388,49 @@ def _format_american_odds(value):
     return str(value)
 
 
+# Matches "Total <Noun>" inside a market label (e.g. "Total Sets (2.5)" ->
+# "Sets", "3Rd Set Total Games (12.5)" -> "Games") to recover a display
+# unit for over/under legs - see _format_leg_selection.
+_TOTAL_UNIT_RE = re.compile(r"total\s+([a-z]+)", re.IGNORECASE)
+
+
+def _format_leg_selection(selection, selection_type, line, market_label):
+    """Builds a leg's display selection to include its line, not just the
+    bare word SharpAPI sends in "selection" - confirmed against real rows
+    that "selection" is literally just "Over"/"Under" for totals, or just
+    the bare team name ("KC Chiefs") for spreads, with the line always a
+    separate field. A table full of legs all reading "Over"/"Under" with
+    no indication of the line or what market it's on isn't usable once
+    there's more than one total market on the same slate (e.g. a tennis
+    card mixing "Total Sets" and "3rd Set Total Games" - both would show
+    identical bare "Over"/"Under" chips with nothing to tell them apart).
+
+    Over/under-style legs (by selection_type or the bare selection text,
+    since SharpAPI's Arbitrage leg schema doesn't confirm selection_type
+    is always present) get the line plus a unit word scraped from the
+    market label when the label fits the "Total <noun>" pattern - "Under"
+    + line 2.5 + market_label "Total Sets (2.5)" -> "Under 2.5 Sets".
+    Falls back to just the line with no unit word if no such pattern is
+    found in the label, rather than guessing at one.
+
+    Spread-style legs (a team name paired with a signed line) get the
+    signed line appended instead - "KC Chiefs" + line -0.5 -> "KC Chiefs
+    -0.5" - no unit word attempted there, teams aren't measured in units.
+
+    Anything without a usable numeric line (moneyline, draw, outright)
+    passes through unchanged."""
+    if not isinstance(line, (int, float)):
+        return selection
+
+    sel_lower = (selection or "").strip().lower()
+    if selection_type in ("over", "under") or sel_lower in ("over", "under"):
+        unit_match = _TOTAL_UNIT_RE.search(market_label or "")
+        unit = f" {unit_match.group(1).capitalize()}" if unit_match else ""
+        return f"{selection} {line:g}{unit}"
+
+    return f"{selection} {line:+g}"
+
+
 def _with_deep_link_fallback(deep_link, sportsbook_display_name):
     """Appends SharpAPI's confirmed-real ?fallback= param to a deep_link,
     so a link that's gone stale/expired by click time (confirmed real
@@ -501,7 +544,9 @@ def fetch_arbs_paid(min_profit=0.0, books=None, sport=None, league=None):
             "legs": [
                 {
                     "sportsbook": leg.get("sportsbook", ""),
-                    "selection": leg.get("selection", ""),
+                    "selection": _format_leg_selection(
+                        leg.get("selection", ""), leg.get("selection_type"), leg.get("line"), market_label
+                    ),
                     "odds_american": _format_american_odds(leg.get("odds_american")),
                     "stake_percent": leg.get("stake_percent", 0),
                     # The server appends ?state= to this itself based on
@@ -878,7 +923,9 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
             display_name = _book_display_name(_normalize_book(leg.get("sportsbook", "")))
             arb_legs.append({
                 "sportsbook": display_name,
-                "selection": leg.get("selection", ""),
+                "selection": _format_leg_selection(
+                    leg.get("selection", ""), leg.get("selection_type"), leg.get("line"), market_label
+                ),
                 "odds_american": _format_american_odds(leg.get("odds_american")),
                 "stake_percent": round(stake_percent, 2),
                 "deep_link": _with_deep_link_fallback(leg.get("deep_link"), display_name),

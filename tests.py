@@ -18,6 +18,7 @@ from app import (
     _canonical_event_id,
     _legs_form_valid_arb,
     _is_stale_live_row,
+    _format_leg_selection,
     MAX_LIVE_ROW_AGE_SECONDS,
 )
 
@@ -274,6 +275,30 @@ def test_canonical_event_id_helper():
     assert _canonical_event_id("mlb_athletics_mariners_2026-05-02_b0") != "mlb_athletics_mariners_2026-05-02"
 
 
+def test_format_leg_selection_helper():
+    """Bug: a real tennis slate showed multiple totals legs all as bare
+    "Over"/"Under" with no line and no indication of which market - two
+    different "Total Sets"/"3rd Set Total Games" legs were indistinguishable
+    in the UI. SharpAPI's own "selection" field really is just the bare
+    word for totals (and just the bare team name for spreads), confirmed
+    against real rows - the line is always a separate field."""
+    # Totals: line + a unit word scraped from "Total <noun>" in the label.
+    assert _format_leg_selection("Under", "under", 2.5, "Total Sets (2.5)") == "Under 2.5 Sets"
+    assert _format_leg_selection("Over", "over", 12.5, "3Rd Set Total Games (12.5)") == "Over 12.5 Games"
+    # No "Total <noun>" pattern in the label - falls back to just the line,
+    # not a guessed unit.
+    assert _format_leg_selection("Over", "over", 2.5, "Something Else (2.5)") == "Over 2.5"
+    # Spreads: bare team name + signed line, no invented unit word.
+    assert _format_leg_selection("KC Chiefs", "home", -0.5, "Point Spread (-0.5)") == "KC Chiefs -0.5"
+    assert _format_leg_selection("DEN Broncos", "away", 0.5, "Point Spread (-0.5)") == "DEN Broncos +0.5"
+    # No usable numeric line (moneyline, draw, outright) - unchanged.
+    assert _format_leg_selection("Alex Barrena", None, None, "Moneyline") == "Alex Barrena"
+    assert _format_leg_selection("Draw", "draw", None, "Moneyline") == "Draw"
+    # selection_type absent (unconfirmed on the Arbitrage endpoint's legs)
+    # still works via the bare selection text itself.
+    assert _format_leg_selection("Under", None, 8.5, "Total Points (8.5)") == "Under 8.5 Points"
+
+
 def test_legs_form_valid_arb_helper():
     assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "betmgm"}]) is False
     assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "fanduel"}]) is True
@@ -295,6 +320,7 @@ ALL_TESTS = [
     test_is_stale_live_row_helper,
     test_doubleheader_suffix_reunited_across_books,
     test_canonical_event_id_helper,
+    test_format_leg_selection_helper,
     test_legs_form_valid_arb_helper,
 ]
 
