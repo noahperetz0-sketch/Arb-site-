@@ -488,8 +488,8 @@ button#refreshBtn:disabled {
 .arb-table-header,
 .arb-row {
   display: grid;
-  grid-template-columns: 64px 140px minmax(170px, 1.1fr) 110px minmax(300px, 2fr);
-  align-items: center;
+  grid-template-columns: 92px 140px minmax(170px, 1.1fr) 110px minmax(300px, 2fr);
+  align-items: start;
   gap: 12px;
 }
 
@@ -531,11 +531,13 @@ button#refreshBtn:disabled {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  overflow-wrap: anywhere;
 }
 
 .td-market {
   font-size: 13px;
   color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .game-name {
@@ -643,7 +645,7 @@ button#refreshBtn:disabled {
 @media (max-width: 700px) {
   .arb-table-header,
   .arb-row {
-    grid-template-columns: 56px 110px minmax(150px, 1fr) 90px minmax(260px, 1.6fr);
+    grid-template-columns: 80px 110px minmax(150px, 1fr) 90px minmax(260px, 1.6fr);
   }
 }
 
