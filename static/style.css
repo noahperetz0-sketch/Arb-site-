@@ -383,6 +383,9 @@ button#refreshBtn:disabled {
 }
 
 .filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
   margin-bottom: 12px;
 }
 
@@ -394,7 +397,8 @@ button#refreshBtn:disabled {
   color: var(--muted);
 }
 
-.live-filter-label select {
+.live-filter-label select,
+.live-filter-label input[type="number"] {
   padding: 6px 10px;
   background: var(--card);
   border: 1px solid var(--border);
@@ -403,7 +407,8 @@ button#refreshBtn:disabled {
   font-size: 13px;
 }
 
-.live-filter-label select:focus {
+.live-filter-label select:focus,
+.live-filter-label input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
 }

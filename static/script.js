@@ -12,6 +12,8 @@ const leagueSelectEl = document.getElementById("leagueSelect");
 const sportLeagueNoteEl = document.getElementById("sportLeagueNote");
 const scanScopeNoteEl = document.getElementById("scanScopeNote");
 const liveFilterSelect = document.getElementById("liveFilter");
+const minProfitFilterInput = document.getElementById("minProfitFilter");
+const sortBySelect = document.getElementById("sortBy");
 const filtersToggleBtn = document.getElementById("filtersToggleBtn");
 const filtersPanelEl = document.getElementById("filtersPanel");
 const filtersSummaryEl = document.getElementById("filtersSummary");
@@ -563,9 +565,31 @@ async function loadArbs() {
 
 function getFilteredArbs() {
   const filter = liveFilterSelect.value;
-  if (filter === "live") return currentArbs.filter((a) => a.is_live);
-  if (filter === "prematch") return currentArbs.filter((a) => !a.is_live);
-  return currentArbs;
+  let result = currentArbs;
+  if (filter === "live") result = result.filter((a) => a.is_live);
+  else if (filter === "prematch") result = result.filter((a) => !a.is_live);
+
+  // NBA season brings many more simultaneous arbs than NFL Sundays ever
+  // did - a minimum-profit filter keeps the list usable instead of
+  // scrolling past dozens of sub-1% opportunities to find the good ones.
+  const minProfit = parseFloat(minProfitFilterInput.value);
+  if (Number.isFinite(minProfit) && minProfit > 0) {
+    result = result.filter((a) => a.profit_percent >= minProfit);
+  }
+
+  if (sortBySelect.value === "soonest") {
+    // Arbs already arrive sorted by profit_percent descending from the
+    // backend (compute_arbs_from_odds/fetch_arbs_paid both sort that way)
+    // - only re-sort when the user asked for start-time order instead.
+    // Arbs with no known start time sort last rather than first.
+    result = [...result].sort((a, b) => {
+      const ta = a.event_start_time ? new Date(a.event_start_time).getTime() : Infinity;
+      const tb = b.event_start_time ? new Date(b.event_start_time).getTime() : Infinity;
+      return ta - tb;
+    });
+  }
+
+  return result;
 }
 
 function formatEventTime(isoString) {
@@ -673,14 +697,22 @@ leagueSelectEl.addEventListener("change", () => {
   if (currentLeague) loadArbs();
 });
 
-liveFilterSelect.addEventListener("change", () => {
+// Shared by every control that only narrows/reorders the already-loaded
+// arb list (live/prematch, min profit, sort) rather than needing a new
+// server request - re-renders in place and refreshes the shown-count in
+// the status line without disturbing an in-progress "Loading..." message.
+function refreshFilteredView() {
   updateFiltersSummary();
   renderArbs();
   const shown = getFilteredArbs().length;
   if (statusEl.textContent.startsWith("Live data")) {
     statusEl.textContent = `Live data · ${shown} opportunit${shown === 1 ? "y" : "ies"} shown · updated ${new Date().toLocaleTimeString()}`;
   }
-});
+}
+
+liveFilterSelect.addEventListener("change", refreshFilteredView);
+minProfitFilterInput.addEventListener("input", refreshFilteredView);
+sortBySelect.addEventListener("change", refreshFilteredView);
 
 refreshBtn.addEventListener("click", loadArbs);
 totalStakeInput.addEventListener("input", renderArbs);

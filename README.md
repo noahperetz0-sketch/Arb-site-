@@ -84,8 +84,14 @@ To run the regression tests instead of the site: `python tests.py`.
 - **Sports and Sportsbooks panels collapse independently** of each other
   and of the outer Filters panel, so you can close one while working on
   the other instead of everything competing for space at once.
-- **Live/Pre-match filter**: filters the currently-loaded results
-  client-side, no extra API call.
+- **Live/Pre-match filter, minimum profit filter, and sort order**: all
+  filter/reorder the currently-loaded results client-side, no extra API
+  call. The minimum-profit filter matters once a busier slate (NBA season,
+  multiple simultaneous games) is producing more arbs at once than a
+  quick glance can parse — set it to e.g. 1% to cut the noise. Sort
+  defaults to highest profit first (already the order the backend returns
+  them in); "Starting soonest" re-sorts by event start time instead, for
+  prioritizing what needs action first.
 - **Place Bet button**: opens SharpAPI's deep link for that leg on that
   sportsbook in a new tab, when one is available. BetMGM, Caesars, and
   BetRivers have state-dependent deep link domains (confirmed in
@@ -166,6 +172,13 @@ sportsbook apps) before these checks existed. All are covered by
 - **A short server-side cache (8s)** prevents rapid toggle-clicking or
   multiple open tabs from burning through the API's rate limit (Hobby plan:
   120 requests/minute, confirmed against SharpAPI's own docs).
+- **Odds requests follow pagination** (up to 3 pages, 600 rows, per book
+  per scan) instead of reading only the first 200-row page. A busy NBA
+  slate alone — a dozen games × ~40+ non-prop rows each across full-game
+  and quarter/half markets — already exceeds 200 rows before a single
+  player-prop row (fetched but discarded) enters the budget. Reading only
+  page 1 would have silently truncated some games out of the scan
+  entirely on exactly the nights with the most real arbs to find.
 
 ## A note on the SharpAPI integration
 The confirmed-real endpoint `/api/v1/odds` (sport + optional league +

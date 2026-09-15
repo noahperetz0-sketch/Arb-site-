@@ -82,12 +82,24 @@ MAX_LIVE_ROW_AGE_SECONDS = 10
 # below, not for any actual backoff logic.
 SHARPAPI_RATE_LIMIT_PER_MINUTE = 120
 
-# Rows returned per sportsbook per scan. We only read the first page per
-# book rather than following pagination — a single event's markets alone
-# can fill 50 rows, so chasing every page across every sport/book would
-# multiply request count unpredictably for a personal tool like this. A
-# deliberate scope limit, not an unknown to revisit.
+# Rows returned per sportsbook per PAGE (200 is SharpAPI's documented max
+# for `limit`). A single 200-row page is not enough on a busy slate: a
+# dozen NBA games at ~40+ non-prop rows each (moneyline/spread/total ×
+# full-game + 4 quarters + 2 halves × 2 sides) already exceeds 200 before
+# player-prop rows - which we fetch but discard - even enter the budget.
+# Truncating silently would mean whole games/markets never get scanned for
+# arbs on exactly the nights (NBA season) this matters most. See
+# MAX_ODDS_PAGES_PER_BOOK below for how far we page to cover that.
 ODDS_PAGE_LIMIT = 200
+
+# fetch_odds_for_book() follows cursor-based pagination (confirmed real:
+# pagination.next_cursor / has_more) up to this many pages per book per
+# scan, instead of the previous single-page-only behavior. Bounded rather
+# than unbounded so one heavy book/sport/league combo can't runaway a
+# scan's request budget - 3 pages = up to 600 rows/book/scan, comfortably
+# covering a full NBA slate's main markets while staying a small multiple
+# of the Hobby-tier 120 req/min limit even with all 5 plan books selected.
+MAX_ODDS_PAGES_PER_BOOK = 3
 
 # Short in-memory cache so rapid book-toggle clicks or multiple open tabs
 # don't burn through the API's request budget.
@@ -505,22 +517,26 @@ def fetch_arbs_paid(min_profit=0.0, books=None, sport=None, league=None):
 
 
 def fetch_odds_for_book(sportsbook, sport, league=None, limit=ODDS_PAGE_LIMIT):
-    """Calls SharpAPI's confirmed-real /odds endpoint for one sportsbook.
+    """Calls SharpAPI's confirmed-real /odds endpoint for one sportsbook,
+    following cursor-based pagination up to MAX_ODDS_PAGES_PER_BOOK pages
+    when a slate has more rows than fit on one page (offset-based paging
+    is capped at 500 by SharpAPI and isn't used here - cursor is what
+    their own docs recommend for "any multi-page scan", and is immune to
+    the row-drift offset pagination can suffer against live data).
+
     Response shape per SharpAPI's own "Response Conventions" docs (the
     paginated-list shape): {"data": [{...row}], "pagination": {...},
     "updated_at": "..."} - "pagination" is a top-level sibling of "data",
-    not nested under a "meta" key. We only ever read .data, so this shape
-    detail doesn't currently matter functionally, but matters if pagination
-    is ever consumed later. Each row has event_id, sportsbook, market_type,
-    selection, selection_type, line, odds_decimal, odds_american, is_active,
-    is_player_prop, timestamp, home_team, away_team, league, etc.
+    not nested under a "meta" key. Each row has event_id, sportsbook,
+    market_type, selection, selection_type, line, odds_decimal,
+    odds_american, is_active, is_player_prop, timestamp, home_team,
+    away_team, league, etc.
 
-    ODDS_PAGE_LIMIT (200) matches SharpAPI's documented max for `limit`.
-    We deliberately never page past offset=0 (see ODDS_PAGE_LIMIT's own
-    comment) - also confirmed sane now that offset is documented as capped
-    at 500 on this endpoint anyway (400 offset_too_large beyond that),
-    with cursor-based pagination as the real way to go deeper, which we
-    don't use.
+    Only the FIRST page's failure propagates (a book that's tier-restricted
+    or not in your SharpAPI dashboard selection fails on page 1, exactly
+    as before - see book_issues upstream). A failure on page 2+ just stops
+    pagination and returns whatever was already collected, rather than
+    discarding a partially-successful fetch.
 
     league=None omits the league filter entirely (all leagues for this
     sport) rather than falling back to a default - callers that want a
@@ -530,14 +546,38 @@ def fetch_odds_for_book(sportsbook, sport, league=None, limit=ODDS_PAGE_LIMIT):
     deep_link resolution on BetMGM/Caesars/BetRivers (state-dependent
     sportsbook domains); harmless no-op for every other book."""
     headers = {"X-API-Key": SHARPAPI_KEY}
-    params = {"sport": sport, "sportsbook": sportsbook, "limit": limit}
+    base_params = {"sport": sport, "sportsbook": sportsbook, "limit": limit}
     if league:
-        params["league"] = league
+        base_params["league"] = league
     if SHARPAPI_STATE:
-        params["state"] = SHARPAPI_STATE
-    resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/odds", headers=headers, params=params, timeout=10)
+        base_params["state"] = SHARPAPI_STATE
+
+    resp = requests.get(f"{SHARPAPI_BASE_URL}/api/v1/odds", headers=headers, params=base_params, timeout=10)
     resp.raise_for_status()
-    return resp.json().get("data", [])
+    body = resp.json()
+    all_rows = list(body.get("data", []))
+    pagination = body.get("pagination", {})
+    cursor = pagination.get("next_cursor")
+
+    page = 1
+    while pagination.get("has_more") and cursor and page < MAX_ODDS_PAGES_PER_BOOK:
+        try:
+            next_resp = requests.get(
+                f"{SHARPAPI_BASE_URL}/api/v1/odds",
+                headers=headers,
+                params={**base_params, "cursor": cursor},
+                timeout=10,
+            )
+            next_resp.raise_for_status()
+            body = next_resp.json()
+        except requests.RequestException:
+            break
+        all_rows.extend(body.get("data", []))
+        pagination = body.get("pagination", {})
+        cursor = pagination.get("next_cursor")
+        page += 1
+
+    return all_rows
 
 
 def _error_code_from_response(exc):

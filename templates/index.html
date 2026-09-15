@@ -77,6 +77,17 @@
             <option value="prematch">Pre-match only</option>
           </select>
         </label>
+        <label class="live-filter-label">
+          Min profit
+          <input type="number" id="minProfitFilter" value="0" min="0" step="0.1" inputmode="decimal" style="width: 70px;" />%
+        </label>
+        <label class="live-filter-label">
+          Sort
+          <select id="sortBy">
+            <option value="profit">Highest profit first</option>
+            <option value="soonest">Starting soonest</option>
+          </select>
+        </label>
       </div>
     </div>
 
