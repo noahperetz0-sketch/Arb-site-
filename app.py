@@ -2,6 +2,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import requests
 from flask import Flask, jsonify, render_template, request
@@ -357,26 +358,68 @@ def _format_american_odds(value):
     return str(value)
 
 
-def fetch_arbs_paid(min_profit=0.5, books=None):
-    """Calls SharpAPI's pre-computed arbitrage endpoint - confirmed real per
-    SharpAPI's own docs (GET /api/v1/opportunities/arbitrage, Hobby tier or
-    higher required; this site's plan is Hobby, so it should be reachable).
-    Un-namespaced paths like /api/v1/arbitrage are a documented 410 Gone
-    with a correct_endpoint pointer, which is why we've always used the
-    /opportunities/ prefix here.
+def _with_deep_link_fallback(deep_link, sportsbook_display_name):
+    """Appends SharpAPI's confirmed-real ?fallback= param to a deep_link,
+    so a link that's gone stale/expired by click time (confirmed real
+    scenario - the BetRivers "Deep link ID not found" bug, see
+    MAX_LIVE_ROW_AGE_SECONDS above) takes the user somewhere useful
+    instead of SharpAPI's raw {"error": {"code": "not_found", ...}} JSON.
+    Points at a search for the book's name rather than a guessed homepage
+    URL, since this project avoids hand-guessing real-world URLs.
 
-    The exact query params and response fields for THIS SPECIFIC endpoint
-    are still not confirmed (the general /odds-family filter docs - sport,
-    league, sportsbook, market, limit, offset, cursor - don't necessarily
-    apply to /opportunities/* the same way, and the general docs don't list
-    a min_profit param at all - it's a guess modeled after the confirmed
-    /opportunities/ev endpoint's own min_ev param). api_arbs() below falls
-    back to compute_arbs_from_odds() (built from the confirmed-real /odds
-    endpoint, with every field this app relies on directly confirmed) if
-    this fails for any reason - including a wrong/unrecognized param name
-    silently returning nothing or a validation_error, not just a 403."""
+    deep_link may already carry a query string (e.g. "?state=nj", either
+    baked in server-side from our own SHARPAPI_STATE on the /odds request,
+    or appended fresh for arb legs) - detect that to use "&" vs "?"."""
+    if not deep_link:
+        return deep_link
+    fallback_url = f"https://www.google.com/search?q={quote((sportsbook_display_name or '') + ' sportsbook')}"
+    separator = "&" if "?" in deep_link else "?"
+    return f"{deep_link}{separator}fallback={quote(fallback_url, safe='')}"
+
+
+# Confirmed real warning flags for GET /api/v1/opportunities/arbitrage (per
+# SharpAPI's own docs). Rejecting an explicit set instead of a substring
+# guess ("SUSPICIOUS"/"STALE" in w) because the substring guess would have
+# missed LOW_IMPLIED_TOTAL (reserved, not currently emitted, but a real
+# data-quality flag when it is: "verify the prices before betting" - no
+# "SUSPICIOUS" or "STALE" substring at all). LIVE_GAME alone is purely
+# informational and must NOT cause rejection - it's not in this set.
+_ARB_REJECT_WARNINGS = {
+    "LIVE_HIGH_PROFIT_SUSPICIOUS",
+    "HIGH_PROFIT_SUSPICIOUS",
+    "LIVE_STALE_ODDS",
+    "POTENTIALLY_STALE_ODDS",
+    "VERY_STALE_ODDS",
+    "LOW_IMPLIED_TOTAL",
+}
+
+
+def fetch_arbs_paid(min_profit=0.0, books=None, sport=None, league=None):
+    """Calls SharpAPI's pre-computed arbitrage endpoint - confirmed real,
+    field-checked against SharpAPI's own docs and a real response (GET
+    /api/v1/opportunities/arbitrage, Hobby tier+, which this site's plan
+    meets). min_profit/sportsbook/sport/league/state are all confirmed
+    real query params for this specific endpoint (previously some were
+    guessed). Un-namespaced paths like /api/v1/arbitrage are a documented
+    410 Gone with a correct_endpoint pointer, which is why we've always
+    used the /opportunities/ prefix here.
+
+    min_profit defaults to 0.0 (not SharpAPI's own suggested 0.5) to match
+    compute_arbs_from_odds()'s default - the same "show every genuine arb,
+    let the user's own judgment size it" philosophy on both paths, rather
+    than the paid endpoint silently applying a stricter floor than the
+    odds-scan fallback would for the same request.
+
+    api_arbs() below falls back to compute_arbs_from_odds() (built from
+    the confirmed-real /odds endpoint) if this fails for any reason."""
     headers = {"X-API-Key": SHARPAPI_KEY}
     params = {"min_profit": min_profit, "sportsbook": books or SHARPAPI_BOOKS}
+    if sport:
+        params["sport"] = sport
+    if league:
+        params["league"] = league
+    if SHARPAPI_STATE:
+        params["state"] = SHARPAPI_STATE
     resp = requests.get(
         f"{SHARPAPI_BASE_URL}/api/v1/opportunities/arbitrage",
         headers=headers,
@@ -392,7 +435,12 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
     for arb in data:
         if arb.get("possibly_stale"):
             continue
-        if any("SUSPICIOUS" in w or "STALE" in w for w in arb.get("warnings", [])):
+        if _ARB_REJECT_WARNINGS.intersection(arb.get("warnings", [])):
+            continue
+        # Same exclusion as compute_arbs_from_odds() - player props are
+        # excluded site-wide, and this endpoint has its own is_player_prop
+        # flag we weren't previously checking at all.
+        if arb.get("is_player_prop"):
             continue
 
         profit_percent = arb.get("profit_percent", 0)
@@ -407,11 +455,17 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
         if not _legs_form_valid_arb(raw_legs):
             continue
 
+        league_label = arb.get("league_label") or arb.get("league", "")
+        market_label = arb.get("market_label", "")
+
         arbs.append({
             "event_name": arb.get("event_name", ""),
-            "league": arb.get("league", ""),
+            "league": f"{league_label} · {market_label}" if league_label else market_label,
             "profit_percent": profit_percent,
-            "event_start_time": arb.get("event_start_time"),
+            # Confirmed field is "start_time", not "event_start_time" (the
+            # odds-scan path's field name) - reading the wrong key here
+            # meant every card from this path showed "Start time unknown".
+            "event_start_time": arb.get("start_time"),
             "is_live": bool(arb.get("is_live", False)),
             "legs": [
                 {
@@ -419,7 +473,14 @@ def fetch_arbs_paid(min_profit=0.5, books=None):
                     "selection": leg.get("selection", ""),
                     "odds_american": _format_american_odds(leg.get("odds_american")),
                     "stake_percent": leg.get("stake_percent", 0),
-                    "deep_link": leg.get("deep_link"),
+                    # The server appends ?state= to this itself based on
+                    # our request's own state param (see SHARPAPI_STATE) -
+                    # explicit null (e.g. exchange legs with no resolver)
+                    # passes through unchanged, otherwise gets ?fallback=
+                    # appended (see _with_deep_link_fallback).
+                    "deep_link": _with_deep_link_fallback(
+                        leg.get("deep_link"), _book_display_name(leg.get("sportsbook", ""))
+                    ),
                 }
                 for leg in raw_legs
             ],
@@ -732,12 +793,13 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
         arb_legs = []
         for leg in legs:
             stake_percent = (1.0 / leg["odds_decimal"]) / implied_sum * 100
+            display_name = _book_display_name(_normalize_book(leg.get("sportsbook", "")))
             arb_legs.append({
-                "sportsbook": _book_display_name(_normalize_book(leg.get("sportsbook", ""))),
+                "sportsbook": display_name,
                 "selection": leg.get("selection", ""),
                 "odds_american": _format_american_odds(leg.get("odds_american")),
                 "stake_percent": round(stake_percent, 2),
-                "deep_link": leg.get("deep_link"),
+                "deep_link": _with_deep_link_fallback(leg.get("deep_link"), display_name),
             })
 
         arbs.append({
@@ -917,13 +979,15 @@ def api_arbs():
 
     # The pre-computed arbitrage endpoint only makes sense for one
     # sport/league at a time, so "scan everything" always goes straight to
-    # the odds-scan path below.
+    # the odds-scan path below. This branch guarantees exactly one sport
+    # and one specific league are selected, so both are always safe to pass.
     if not scan_all_sports and not multi_sport and not scan_all_leagues:
         try:
-            arbs = fetch_arbs_paid(books=selected_books)
+            one_sport = sport_ids[0] if sport_ids else DEFAULT_SPORT
+            arbs = fetch_arbs_paid(books=selected_books, sport=one_sport, league=league_param)
             mode = "paid_endpoint"
         except Exception:
-            pass  # unconfirmed params for this endpoint — fall back below
+            pass  # falls back to the odds-scan path below on any failure
 
     if arbs is None:
         try:

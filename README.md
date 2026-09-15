@@ -90,8 +90,12 @@ To run the regression tests instead of the site: `python tests.py`.
   sportsbook in a new tab, when one is available. BetMGM, Caesars, and
   BetRivers have state-dependent deep link domains (confirmed in
   SharpAPI's docs) — set `SHARPAPI_STATE` to your two-letter state code so
-  those resolve correctly instead of potentially pointing at the wrong
-  state's (or a generic) URL.
+  those resolve correctly. If unset, SharpAPI defaults to `pa`
+  (Pennsylvania) server-side, which is almost certainly wrong for you.
+  Every deep link also carries a `?fallback=` param pointing at a search
+  for the sportsbook's name, so a link that's gone stale by click time
+  (the original BetRivers bug) lands somewhere useful instead of
+  SharpAPI's raw `{"error": {"code": "not_found", ...}}` JSON.
 - **$ profit + event start time**: shown on every card alongside the
   percentage, recalculating live as you change your total stake.
 
@@ -147,13 +151,18 @@ sportsbook apps) before these checks existed. All are covered by
 The confirmed-real endpoint `/api/v1/odds` (sport + optional league +
 sportsbook) is what all arb-matching is actually built on. A pre-computed
 `/api/v1/opportunities/arbitrage` endpoint is attempted first as a bonus -
-confirmed to be a real, documented endpoint (Hobby tier or higher, which
-this site's plan is), but its exact query params/response fields for this
-specific endpoint aren't confirmed yet, so it falls back to the
-`/odds`-based matching on any failure, not just a 403. `/api/v1/sports`,
-`/api/v1/leagues`, and `/api/v1/sportsbooks` (for the sport/league
-dropdowns and the sportsbook toggle catalog) are all confirmed-real too,
-each with a small hardcoded fallback if the live call fails.
+fully confirmed and field-checked against SharpAPI's own docs (Hobby tier
+or higher, which this site's plan is): `sport`/`league`/`market`/
+`min_profit`/`state` are all real params now passed through correctly,
+its warning flags (`LIVE_HIGH_PROFIT_SUSPICIOUS`, `HIGH_PROFIT_SUSPICIOUS`,
+`LIVE_STALE_ODDS`, `POTENTIALLY_STALE_ODDS`, `VERY_STALE_ODDS`, and the
+reserved `LOW_IMPLIED_TOTAL`) are matched exactly rather than
+substring-guessed, and player props are excluded on this path too (they
+weren't before). Still falls back to the `/odds`-based matching on any
+failure. `/api/v1/sports`, `/api/v1/leagues`, and `/api/v1/sportsbooks`
+(for the sport/league dropdowns and the sportsbook toggle catalog) are all
+confirmed-real too, each with a small hardcoded fallback if the live call
+fails.
 
 **Two separate ways a book can return nothing**, per SharpAPI's documented
 error codes: `tier_restricted` (your plan tier doesn't cover this book at
