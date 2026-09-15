@@ -294,6 +294,62 @@ button#refreshBtn:disabled {
   color: white;
 }
 
+.favorites-only-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.favorites-only-label input {
+  accent-color: #f5a524;
+  cursor: pointer;
+}
+
+.toggle-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fav-star-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.fav-star-btn:hover {
+  border-color: #f5a524;
+  color: #f5a524;
+}
+
+.fav-star-btn.is-favorite {
+  color: #f5a524;
+  border-color: #f5a524;
+}
+
+.favorites-empty-hint {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 0;
+}
+
 .book-remove-btn {
   display: inline-flex;
   align-items: center;

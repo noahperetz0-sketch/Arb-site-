@@ -24,12 +24,23 @@ const booksSectionSummaryEl = document.getElementById("booksSectionSummary");
 const booksSectionBodyEl = document.getElementById("booksSectionBody");
 const addBookForm = document.getElementById("addBookForm");
 const addBookInput = document.getElementById("addBookInput");
+const sportsFavoritesOnlyToggle = document.getElementById("sportsFavoritesOnlyToggle");
+const booksFavoritesOnlyToggle = document.getElementById("booksFavoritesOnlyToggle");
 
 const FILTERS_COLLAPSED_KEY = "arbScreenerFiltersCollapsed";
 const SPORTS_SECTION_COLLAPSED_KEY = "arbScreenerSportsSectionCollapsed";
 const BOOKS_SECTION_COLLAPSED_KEY = "arbScreenerBooksSectionCollapsed";
 const CUSTOM_BOOKS_KEY = "arbScreenerCustomBooks";
 const SELECTED_BOOK_IDS_KEY = "arbScreenerSelectedBookIds";
+// "My List" - a personal shortlist of sports/books you actually use, so the
+// panel can be narrowed down to just those (still individually toggleable
+// within it) instead of scrolling the full catalog every time. Useful when
+// your SharpAPI plan caps how many books can be selected at once (e.g.
+// Hobby's 5-book cap) but you rotate between a wider set of ~10 you follow.
+const FAVORITE_SPORT_IDS_KEY = "arbScreenerFavoriteSportIds";
+const FAVORITE_BOOK_IDS_KEY = "arbScreenerFavoriteBookIds";
+const SPORTS_FAVORITES_ONLY_KEY = "arbScreenerSportsFavoritesOnly";
+const BOOKS_FAVORITES_ONLY_KEY = "arbScreenerBooksFavoritesOnly";
 
 // Confirmed rate limit for the Hobby plan (per SharpAPI's own docs):
 // 120 requests/minute. Duplicated from app.py's SHARPAPI_RATE_LIMIT_PER_MINUTE
@@ -69,6 +80,10 @@ let selectedSportIds = new Set();
 let currentLeague = "all";  // only meaningful when exactly one sport is selected
 let isLoading = false;
 let autoRefreshTimer = null;
+let favoriteSportIds = loadIdSetFromStorage(FAVORITE_SPORT_IDS_KEY);
+let favoriteBookIds = loadIdSetFromStorage(FAVORITE_BOOK_IDS_KEY);
+let sportsFavoritesOnly = loadFlagFromStorage(SPORTS_FAVORITES_ONLY_KEY);
+let booksFavoritesOnly = loadFlagFromStorage(BOOKS_FAVORITES_ONLY_KEY);
 
 function showSportLeagueNote(text) {
   if (!text) {
@@ -185,6 +200,39 @@ function saveSelectedBookIdsToStorage() {
   }
 }
 
+function loadIdSetFromStorage(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch (err) {
+    return new Set();
+  }
+}
+
+function saveIdSetToStorage(key, idSet) {
+  try {
+    localStorage.setItem(key, JSON.stringify([...idSet]));
+  } catch (err) {
+    // private browsing / blocked storage - fine to just not persist
+  }
+}
+
+function loadFlagFromStorage(key) {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch (err) {
+    return false;
+  }
+}
+
+function saveFlagToStorage(key, value) {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch (err) {
+    // private browsing / blocked storage - fine to just not persist
+  }
+}
+
 async function loadSports() {
   try {
     const res = await fetch("/api/sports");
@@ -213,6 +261,14 @@ async function loadSports() {
   }
 }
 
+// The "My List" toggle (sportsFavoritesOnly) narrows this down to just the
+// starred sports instead of the full catalog - Select All and the empty-list
+// hint below both need this same filtered view, so it's shared.
+function getVisibleSports() {
+  const sorted = [...allSports].sort((a, b) => a.name.localeCompare(b.name));
+  return sportsFavoritesOnly ? sorted.filter((s) => favoriteSportIds.has(s.id)) : sorted;
+}
+
 function renderSportsPanel() {
   if (!allSports.length) {
     sportsPanelEl.innerHTML = "";
@@ -221,19 +277,27 @@ function renderSportsPanel() {
   }
   toggleAllSportsBtn.style.display = "inline-block";
 
-  const sortedSports = [...allSports].sort((a, b) => a.name.localeCompare(b.name));
+  const visibleSports = getVisibleSports();
 
-  sportsPanelEl.innerHTML = sortedSports
-    .map((s) => {
-      const checked = selectedSportIds.has(s.id) ? "checked" : "";
-      return `
-        <label class="book-toggle">
-          <input type="checkbox" data-sport-id="${s.id}" ${checked} />
-          ${s.name}
-        </label>
-      `;
-    })
-    .join("");
+  if (sportsFavoritesOnly && !visibleSports.length) {
+    sportsPanelEl.innerHTML = `<div class="favorites-empty-hint">No sports in My List yet — click ☆ on any sport below to add it, or turn off "My List" to see all sports.</div>`;
+  } else {
+    sportsPanelEl.innerHTML = visibleSports
+      .map((s) => {
+        const checked = selectedSportIds.has(s.id) ? "checked" : "";
+        const isFav = favoriteSportIds.has(s.id);
+        return `
+          <span class="toggle-item">
+            <label class="book-toggle">
+              <input type="checkbox" data-sport-id="${s.id}" ${checked} />
+              ${s.name}
+            </label>
+            <button type="button" class="fav-star-btn${isFav ? " is-favorite" : ""}" data-fav-sport-id="${s.id}" title="${isFav ? "Remove from My List" : "Add to My List"}" aria-label="${isFav ? "Remove from My List" : "Add to My List"}">${isFav ? "★" : "☆"}</button>
+          </span>
+        `;
+      })
+      .join("");
+  }
 
   sportsPanelEl.querySelectorAll("input[type=checkbox]").forEach((cb) => {
     cb.addEventListener("change", async (e) => {
@@ -250,22 +314,50 @@ function renderSportsPanel() {
     });
   });
 
+  sportsPanelEl.querySelectorAll("button[data-fav-sport-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-fav-sport-id");
+      if (favoriteSportIds.has(id)) {
+        favoriteSportIds.delete(id);
+      } else {
+        favoriteSportIds.add(id);
+      }
+      saveIdSetToStorage(FAVORITE_SPORT_IDS_KEY, favoriteSportIds);
+      renderSportsPanel();
+    });
+  });
+
   updateToggleAllSportsLabel();
   updateSportsSectionSummary();
 }
 
 function updateToggleAllSportsLabel() {
-  const allSelected = allSports.length > 0 && selectedSportIds.size === allSports.length;
+  const visible = getVisibleSports();
+  const allSelected = visible.length > 0 && visible.every((s) => selectedSportIds.has(s.id));
   toggleAllSportsBtn.textContent = allSelected ? "Deselect All" : "Select All";
 }
 
+// Select All/Deselect All only acts on the currently visible sports, so
+// with "My List" on it toggles just your starred sports rather than
+// pulling in the full catalog.
 toggleAllSportsBtn.addEventListener("click", async () => {
-  const allSelected = allSports.length > 0 && selectedSportIds.size === allSports.length;
-  selectedSportIds = allSelected ? new Set() : new Set(allSports.map((s) => s.id));
+  const visible = getVisibleSports();
+  const allSelected = visible.length > 0 && visible.every((s) => selectedSportIds.has(s.id));
+  if (allSelected) {
+    visible.forEach((s) => selectedSportIds.delete(s.id));
+  } else {
+    visible.forEach((s) => selectedSportIds.add(s.id));
+  }
   renderSportsPanel();
   updateFiltersSummary();
   updateSportsSectionSummary();
   await onSportSelectionChanged();
+});
+
+sportsFavoritesOnlyToggle.addEventListener("change", () => {
+  sportsFavoritesOnly = sportsFavoritesOnlyToggle.checked;
+  saveFlagToStorage(SPORTS_FAVORITES_ONLY_KEY, sportsFavoritesOnly);
+  renderSportsPanel();
 });
 
 // "All Leagues" is always offered, even if the specific-leagues fetch below
@@ -411,6 +503,12 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Same "My List" narrowing as getVisibleSports(), for books.
+function getVisibleBooks() {
+  const sorted = [...allBooks].sort((a, b) => a.display_name.localeCompare(b.display_name));
+  return booksFavoritesOnly ? sorted.filter((b) => favoriteBookIds.has(b.id)) : sorted;
+}
+
 function renderBooksPanel() {
   if (!allBooks.length) {
     booksPanelEl.innerHTML = "";
@@ -419,30 +517,41 @@ function renderBooksPanel() {
   }
   toggleAllBtn.style.display = "inline-block";
 
-  const sortedBooks = [...allBooks].sort((a, b) => a.display_name.localeCompare(b.display_name));
+  const visibleBooks = getVisibleBooks();
 
-  booksPanelEl.innerHTML = sortedBooks
-    .map((b) => {
-      const checked = selectedBookIds.has(b.id) ? "checked" : "";
-      const name = escapeHtml(b.display_name);
-      // Lets you see at a glance why a toggled-on book might return
-      // nothing - it needs a higher SharpAPI plan tier than you're on.
-      const tierLabel = b.tier ? TIER_LABELS[b.tier] || b.tier : null;
-      const labelTitle = tierLabel ? ` title="Requires ${escapeHtml(tierLabel)} tier or higher on SharpAPI"` : "";
-      // The remove (x) button is a sibling of the label, not nested inside
-      // it - nesting a button inside a <label> wrapping a checkbox causes
-      // browsers to double-toggle the checkbox when the button is clicked.
-      const removeBtn = b.custom
-        ? `<button type="button" class="book-remove-btn" data-remove-book-id="${escapeHtml(b.id)}" title="Remove ${name}" aria-label="Remove ${name}">&times;</button>`
-        : "";
-      return `
-        <label class="book-toggle"${labelTitle}>
-          <input type="checkbox" data-book-id="${escapeHtml(b.id)}" ${checked} />
-          ${name}${tierLabel ? `<span class="book-tier-badge">${escapeHtml(tierLabel)}</span>` : ""}
-        </label>${removeBtn}
-      `;
-    })
-    .join("");
+  if (booksFavoritesOnly && !visibleBooks.length) {
+    booksPanelEl.innerHTML = `<div class="favorites-empty-hint">No sportsbooks in My List yet — click ☆ on any book below to add it, or turn off "My List" to see all books.</div>`;
+  } else {
+    booksPanelEl.innerHTML = visibleBooks
+      .map((b) => {
+        const checked = selectedBookIds.has(b.id) ? "checked" : "";
+        const name = escapeHtml(b.display_name);
+        // Lets you see at a glance why a toggled-on book might return
+        // nothing - it needs a higher SharpAPI plan tier than you're on.
+        const tierLabel = b.tier ? TIER_LABELS[b.tier] || b.tier : null;
+        const labelTitle = tierLabel ? ` title="Requires ${escapeHtml(tierLabel)} tier or higher on SharpAPI"` : "";
+        const isFav = favoriteBookIds.has(b.id);
+        // The remove (x) and star buttons are siblings of the label, not
+        // nested inside it - nesting a button inside a <label> wrapping a
+        // checkbox causes browsers to double-toggle the checkbox when the
+        // button is clicked. They're wrapped together in .toggle-item so
+        // they wrap to the next line as one unit instead of splitting apart.
+        const removeBtn = b.custom
+          ? `<button type="button" class="book-remove-btn" data-remove-book-id="${escapeHtml(b.id)}" title="Remove ${name}" aria-label="Remove ${name}">&times;</button>`
+          : "";
+        return `
+          <span class="toggle-item">
+            <label class="book-toggle"${labelTitle}>
+              <input type="checkbox" data-book-id="${escapeHtml(b.id)}" ${checked} />
+              ${name}${tierLabel ? `<span class="book-tier-badge">${escapeHtml(tierLabel)}</span>` : ""}
+            </label>
+            <button type="button" class="fav-star-btn${isFav ? " is-favorite" : ""}" data-fav-book-id="${escapeHtml(b.id)}" title="${isFav ? "Remove from My List" : "Add to My List"}" aria-label="${isFav ? "Remove from My List" : "Add to My List"}">${isFav ? "★" : "☆"}</button>
+            ${removeBtn}
+          </span>
+        `;
+      })
+      .join("");
+  }
 
   booksPanelEl.querySelectorAll("input[type=checkbox]").forEach((cb) => {
     cb.addEventListener("change", (e) => {
@@ -466,6 +575,8 @@ function renderBooksPanel() {
       const id = btn.getAttribute("data-remove-book-id");
       allBooks = allBooks.filter((b) => b.id !== id);
       selectedBookIds.delete(id);
+      favoriteBookIds.delete(id);
+      saveIdSetToStorage(FAVORITE_BOOK_IDS_KEY, favoriteBookIds);
       saveCustomBooksToStorage();
       saveSelectedBookIdsToStorage();
       renderBooksPanel();
@@ -476,23 +587,52 @@ function renderBooksPanel() {
     });
   });
 
+  booksPanelEl.querySelectorAll("button[data-fav-book-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-fav-book-id");
+      if (favoriteBookIds.has(id)) {
+        favoriteBookIds.delete(id);
+      } else {
+        favoriteBookIds.add(id);
+      }
+      saveIdSetToStorage(FAVORITE_BOOK_IDS_KEY, favoriteBookIds);
+      renderBooksPanel();
+    });
+  });
+
   updateToggleAllLabel();
   updateBooksSectionSummary();
 }
 
 function updateToggleAllLabel() {
-  const allSelected = allBooks.length > 0 && selectedBookIds.size === allBooks.length;
+  const visible = getVisibleBooks();
+  const allSelected = visible.length > 0 && visible.every((b) => selectedBookIds.has(b.id));
   toggleAllBtn.textContent = allSelected ? "Deselect All" : "Select All";
 }
 
+// Select All/Deselect All only acts on the currently visible books, so with
+// "My List" on it toggles just your starred books rather than pulling in
+// the full catalog (useful when your plan caps simultaneous book selection
+// below the size of your full My List).
 toggleAllBtn.addEventListener("click", () => {
-  const allSelected = allBooks.length > 0 && selectedBookIds.size === allBooks.length;
-  selectedBookIds = allSelected ? new Set() : new Set(allBooks.map((b) => b.id));
+  const visible = getVisibleBooks();
+  const allSelected = visible.length > 0 && visible.every((b) => selectedBookIds.has(b.id));
+  if (allSelected) {
+    visible.forEach((b) => selectedBookIds.delete(b.id));
+  } else {
+    visible.forEach((b) => selectedBookIds.add(b.id));
+  }
   renderBooksPanel();
   updateFiltersSummary();
   saveSelectedBookIdsToStorage();
   restartAutoRefreshIfRunning();
   loadArbs();
+});
+
+booksFavoritesOnlyToggle.addEventListener("change", () => {
+  booksFavoritesOnly = booksFavoritesOnlyToggle.checked;
+  saveFlagToStorage(BOOKS_FAVORITES_ONLY_KEY, booksFavoritesOnly);
+  renderBooksPanel();
 });
 
 // Lets the user add any exact sportsbook id from their own SharpAPI
@@ -805,6 +945,9 @@ try {
   // private browsing / blocked storage - fine to just default to expanded
 }
 setSectionCollapsed(booksToggleBtn, booksSectionBodyEl, BOOKS_SECTION_COLLAPSED_KEY, booksSectionStartCollapsed);
+
+sportsFavoritesOnlyToggle.checked = sportsFavoritesOnly;
+booksFavoritesOnlyToggle.checked = booksFavoritesOnly;
 
 // Initial load: get books and sports in parallel, then leagues if exactly
 // one sport ended up preselected, then the first arb scan.

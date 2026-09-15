@@ -102,6 +102,17 @@ To run the regression tests instead of the site: `python tests.py`.
 - **Sports and Sportsbooks panels collapse independently** of each other
   and of the outer Filters panel, so you can close one while working on
   the other instead of everything competing for space at once.
+- **Sports and Sportsbooks panels sort alphabetically** and each has a
+  **"My List"** shortlist: click the ☆ on any sport/book to star it, then
+  check "★ My List" above that panel to narrow it down to just your
+  starred items — still individually toggleable on/off within that
+  narrowed view, and "Select All"/"Deselect All" only act on what's
+  currently visible. Useful when your SharpAPI plan caps how many books
+  can be selected at once (e.g. Hobby's 5-book cap) but you rotate between
+  a wider set you actually follow — star your ~10, then toggle 5 at a time
+  without hunting through the full 40+ book catalog each time. Stars and
+  the "My List" on/off state are both remembered in the browser
+  (localStorage) across visits, independently for sports and books.
 - **Live/Pre-match filter, minimum profit filter, and sort order**: all
   filter/reorder the currently-loaded results client-side, no extra API
   call. The minimum-profit filter matters once a busier slate (NBA season,
