@@ -57,8 +57,19 @@ To run the regression tests instead of the site: `python tests.py`.
   them (a single league picker doesn't make sense across different
   sports); checking exactly one sport reveals a League dropdown, including
   an "All Leagues" option. Checking 2+ sports multiplies the number of API
-  requests per scan, so auto-refresh automatically disables itself in that
-  mode with an explanation — use the Refresh button manually instead.
+  requests per scan, so **auto-refresh paces itself to a slower interval**
+  instead of running at the default cadence — it no longer hard-disables
+  itself the way it originally did. That older behavior was a real bug in
+  practice: this site's own default sport selection preselects 6 sports
+  simultaneously, so auto-refresh was silently off from the very first
+  page load for nearly everyone, unless they happened to narrow down to
+  exactly one sport - easy to mistake for "auto-refresh doesn't work" (it
+  looked exactly like that) rather than "auto-refresh is deliberately off
+  right now." The interval now scales to stay within the 120 req/min
+  budget at any sport/book combination (as low as 8s with one sport
+  selected, matching SharpAPI's own suggested cadence for live dashboards;
+  up to a few minutes if "All Sports" is selected) rather than an all-or-
+  nothing switch.
 - **Sportsbook toggles**: pick which of your books to scan. Enforced twice
   — sent to SharpAPI's filter, and independently re-checked on every
   returned leg, so a book you didn't select can never appear in a result
@@ -176,9 +187,13 @@ sportsbook apps) before these checks existed. All are covered by
   money and dropped rather than shown.
 - **Book selection and sport/league scope are enforced server-side**,
   independent of whatever SharpAPI's own query filters actually do.
-- **A short server-side cache (8s)** prevents rapid toggle-clicking or
+- **A short server-side cache (3s)** prevents rapid toggle-clicking or
   multiple open tabs from burning through the API's rate limit (Hobby plan:
-  120 requests/minute, confirmed against SharpAPI's own docs).
+  120 requests/minute, confirmed against SharpAPI's own docs). Kept
+  deliberately short (was 8s) since it directly stacks with the other
+  layers between a real price change and what's on screen - see "Live
+  prices are separately checked for staleness by age" below for the full
+  accounting of where that latency actually comes from.
 - **Odds requests follow pagination** (up to 3 pages, 600 rows, per book
   per scan) instead of reading only the first 200-row page. A busy NBA
   slate alone — a dozen games × ~40+ non-prop rows each across full-game

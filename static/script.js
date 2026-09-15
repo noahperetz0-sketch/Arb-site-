@@ -32,11 +32,34 @@ const CUSTOM_BOOKS_KEY = "arbScreenerCustomBooks";
 const SELECTED_BOOK_IDS_KEY = "arbScreenerSelectedBookIds";
 
 // Confirmed rate limit for the Hobby plan (per SharpAPI's own docs):
-// 120 requests/minute. A normal scan (one book toggled on = one request)
-// at this interval stays well under budget even with all 5 plan books
-// selected (5 req / 15s = 20 req/min, ~17% of the limit).
-const AUTO_REFRESH_INTERVAL_MS = 15000;
+// 120 requests/minute. Duplicated from app.py's SHARPAPI_RATE_LIMIT_PER_MINUTE
+// (no shared config between backend/frontend in this app) - keep in sync
+// if the plan tier ever changes.
+const SHARPAPI_RATE_LIMIT_PER_MINUTE = 120;
+
+// Auto-refresh interval scales with how many requests one scan actually
+// costs (sports x books, with a pagination fudge factor - see
+// computeAutoRefreshIntervalMs), instead of the previous fixed 15s that
+// also got HARD-DISABLED entirely whenever 2+ sports were selected. That
+// binary cutoff is why auto-refresh looked "broken" by default: this
+// site's own preferred-sports default preselects 6 sports simultaneously,
+// so auto-refresh was silently off from the very first page load unless
+// you happened to narrow down to exactly one sport. Scaling the interval
+// instead means it always runs, just paced to stay within budget - a
+// heavier scan just refreshes less often rather than not at all.
+const MIN_AUTO_REFRESH_INTERVAL_MS = 8000; // matches SharpAPI's own suggested 5-10s cadence for live dashboards
+const AUTO_REFRESH_BUDGET_FRACTION = 0.5;  // use at most half the rate limit for auto-refresh, leaving room for manual Refresh clicks and other tabs
+const PAGINATION_FUDGE_FACTOR = 1.5;       // a busy slate can trigger multiple pages/book (see MAX_ODDS_PAGES_PER_BOOK in app.py) - pad the estimate rather than undercount
 const PREFERRED_DEFAULT_LEAGUE = "nfl";
+
+function computeAutoRefreshIntervalMs() {
+  const sportCount = Math.max(selectedSportIds.size, 1);
+  const bookCount = Math.max(selectedBookIds.size, 1);
+  const estimatedRequestsPerScan = sportCount * bookCount * PAGINATION_FUDGE_FACTOR;
+  const maxRequestsPerMinute = SHARPAPI_RATE_LIMIT_PER_MINUTE * AUTO_REFRESH_BUDGET_FRACTION;
+  const minIntervalForBudgetMs = (estimatedRequestsPerScan / maxRequestsPerMinute) * 60000;
+  return Math.max(MIN_AUTO_REFRESH_INTERVAL_MS, minIntervalForBudgetMs);
+}
 
 let currentArbs = [];
 let allBooks = [];          // [{id, display_name}, ...]
@@ -302,21 +325,20 @@ async function onSportSelectionChanged() {
 }
 
 function updateScanScopeState() {
-  // Only looping across MULTIPLE sports multiplies request count (one
-  // request per sport per book) - a single sport with "All Leagues" is
-  // still just one request per book, exactly as cheap as one specific
-  // league, so it does NOT need to disable auto-refresh.
+  // Auto-refresh is never hard-disabled anymore - it used to force itself
+  // off whenever 2+ sports were selected, which (combined with this site's
+  // own default of 6 preselected sports) meant it was silently off from
+  // the very first page load for most people. Instead the interval scales
+  // with load (see computeAutoRefreshIntervalMs) and always keeps running.
   const heavy = selectedSportIds.size > 1;
   if (heavy) {
-    scanScopeNoteEl.textContent = `Scanning ${selectedSportIds.size} sports means one API request per sport per book selected — with your 120 requests/minute limit, a single scan like this can use a meaningful chunk of that budget at once. Auto-refresh has been turned off so it doesn't repeat automatically; use the Refresh button when you want to re-scan.`;
+    const intervalSeconds = Math.round(computeAutoRefreshIntervalMs() / 1000);
+    scanScopeNoteEl.textContent = `Scanning ${selectedSportIds.size} sports means one API request per sport per book selected — with your 120 requests/minute limit, auto-refresh paces itself to about every ${intervalSeconds}s while this many sports are selected, instead of the usual ${Math.round(MIN_AUTO_REFRESH_INTERVAL_MS / 1000)}s, so it stays within budget. Narrow to fewer sports for faster auto-refresh.`;
     scanScopeNoteEl.hidden = false;
-    autoRefreshCheckbox.checked = false;
-    autoRefreshCheckbox.disabled = true;
-    stopAutoRefresh();
   } else {
     scanScopeNoteEl.hidden = true;
-    autoRefreshCheckbox.disabled = false;
   }
+  restartAutoRefreshIfRunning();
 }
 
 async function loadBooks() {
@@ -430,6 +452,7 @@ function renderBooksPanel() {
       updateFiltersSummary();
       updateBooksSectionSummary();
       saveSelectedBookIdsToStorage();
+      restartAutoRefreshIfRunning(); // book count affects the paced interval
       loadArbs(); // re-scan immediately with the new book selection
     });
   });
@@ -444,6 +467,7 @@ function renderBooksPanel() {
       renderBooksPanel();
       updateFiltersSummary();
       updateBooksSectionSummary();
+      restartAutoRefreshIfRunning();
       loadArbs();
     });
   });
@@ -463,6 +487,7 @@ toggleAllBtn.addEventListener("click", () => {
   renderBooksPanel();
   updateFiltersSummary();
   saveSelectedBookIdsToStorage();
+  restartAutoRefreshIfRunning();
   loadArbs();
 });
 
@@ -499,6 +524,7 @@ addBookForm.addEventListener("submit", (e) => {
   saveSelectedBookIdsToStorage();
   renderBooksPanel();
   updateFiltersSummary();
+  restartAutoRefreshIfRunning();
   loadArbs();
 });
 
@@ -695,7 +721,14 @@ function stopAutoRefresh() {
 
 function startAutoRefresh() {
   stopAutoRefresh();
-  autoRefreshTimer = setInterval(loadArbs, AUTO_REFRESH_INTERVAL_MS);
+  autoRefreshTimer = setInterval(loadArbs, computeAutoRefreshIntervalMs());
+}
+
+// Re-arms the timer at the (possibly new) interval for the current sport/
+// book selection - called whenever that selection changes, so a heavier
+// scan automatically slows down instead of silently drifting off-budget.
+function restartAutoRefreshIfRunning() {
+  if (autoRefreshTimer) startAutoRefresh();
 }
 
 autoRefreshCheckbox.addEventListener("change", () => {

@@ -102,8 +102,16 @@ ODDS_PAGE_LIMIT = 200
 MAX_ODDS_PAGES_PER_BOOK = 3
 
 # Short in-memory cache so rapid book-toggle clicks or multiple open tabs
-# don't burn through the API's request budget.
-ARBS_CACHE_TTL_SECONDS = 8
+# don't burn through the API's request budget. Was 8s; reduced to 3s since
+# it directly compounds with live-price staleness - the total worst-case
+# gap between a real-world price change and what's on screen is roughly
+# (SharpAPI's own book-collection lag, confirmed ~8-21s for poll-based
+# books like DraftKings) + (this cache) + (the auto-refresh interval,
+# now dynamic - see MIN_AUTO_REFRESH_INTERVAL_MS in script.js). An 8s
+# cache stacked on top of an 8s refresh interval was needlessly doubling
+# that middle term; 3s still gives real click/multi-tab protection
+# without meaningfully adding to the total.
+ARBS_CACHE_TTL_SECONDS = 3
 _arbs_cache = {}  # cache key -> (timestamp, response_dict)
 
 # Sports/leagues change rarely, so this cache lives much longer.
