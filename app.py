@@ -41,7 +41,20 @@ SHARPAPI_STATE = os.environ.get("SHARPAPI_STATE", "")
 # Real cross-book arbs are almost always single digits. Anything above this
 # is far more likely to be stale or mismatched data than free money, so
 # it's dropped rather than shown.
-MAX_SANE_PROFIT_PERCENT = 25.0
+#
+# Was 25.0 - lowered after two confirmed real-world incidents (both WNBA
+# pregame moneylines, both implicating Caesars specifically) that this
+# threshold let straight through: a 12.15% "arb" where Caesars showed
+# Dallas Wings at -159 when the real price was -325, and a 19.68% one
+# where Caesars showed Minnesota Lynx at -118 against a since-confirmed-bad
+# price. Neither arb's `possibly_stale`/`warnings` fields caught it on
+# SharpAPI's own side (fetch_arbs_paid()'s only other line of defense -
+# that endpoint exposes no per-leg timestamp to cross-check independently,
+# unlike /odds). 8.0 comfortably clears legitimate soft-book arbs (which
+# can run a bit hotter than major-book-only pairs, especially in thinner
+# markets like WNBA) while catching both of these specific incidents,
+# which were nowhere near single digits.
+MAX_SANE_PROFIT_PERCENT = 8.0
 
 # SharpAPI's is_stale_pregame_price flag only covers PREGAME prices - it
 # says nothing about a LIVE row having gone stale (confirmed: a real live

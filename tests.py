@@ -20,6 +20,7 @@ from app import (
     _is_stale_live_row,
     _format_leg_selection,
     MAX_LIVE_ROW_AGE_SECONDS,
+    MAX_SANE_PROFIT_PERCENT,
 )
 
 
@@ -106,9 +107,15 @@ def test_nfl_true_complement_spread_is_found():
     """Broncos -0.5 (away, favored) and Chiefs +0.5 (home, underdog) are
     genuine complements of ONE proposition - this must still be found."""
     rows = [
+        # Odds chosen to keep profit_percent comfortably under
+        # MAX_SANE_PROFIT_PERCENT (a real cross-book arb this size is
+        # itself realistic - unlike the earlier 2.55/1.95 pairing, which
+        # implied a >10% profit no genuine arb of this kind produces) so
+        # this test still isolates the true-complement-detection logic
+        # rather than tripping the sanity-cap filter.
         _row(event_id="e5", market_type="1st_quarter_point_spread", sportsbook="betmgm",
              selection_type="away", team_side="away", selection="Denver Broncos",
-             odds_decimal=2.55, odds_american=155, line=-0.5,
+             odds_decimal=2.20, odds_american=120, line=-0.5,
              home_team="Kansas City Chiefs", away_team="Denver Broncos"),
         _row(event_id="e5", market_type="1st_quarter_point_spread", sportsbook="draftkings",
              selection_type="home", team_side="home", selection="KC Chiefs",
@@ -117,6 +124,28 @@ def test_nfl_true_complement_spread_is_found():
     ]
     arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="betmgm,draftkings")
     assert len(arbs) == 1, f"expected 1 true-complement spread arb, got {len(arbs)}"
+
+
+def test_unrealistic_profit_percent_is_excluded():
+    """Bug: a real WNBA moneyline report - FanDuel had LA Sparks +260,
+    Caesars had Dallas Wings -159 - looked like a 12.15% arb and got shown,
+    but Caesars' actual price was -325 (confirmed by the user against the
+    live sportsbook). SharpAPI's own possibly_stale/warnings flags didn't
+    catch it on that (paid-endpoint) path, and MAX_SANE_PROFIT_PERCENT was
+    25.0 at the time - well above 12.15%, so this site's own sanity filter
+    didn't catch it either. These exact odds must now be excluded."""
+    rows = [
+        _row(event_id="e7", market_type="moneyline", sportsbook="fanduel",
+             selection_type="away", selection="LA Sparks",
+             odds_decimal=3.60, odds_american=260,
+             home_team="Dallas Wings", away_team="LA Sparks", league="wnba"),
+        _row(event_id="e7", market_type="moneyline", sportsbook="caesars",
+             selection_type="home", selection="Dallas Wings",
+             odds_decimal=1.629, odds_american=-159,
+             home_team="Dallas Wings", away_team="LA Sparks", league="wnba"),
+    ]
+    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="fanduel,caesars")
+    assert len(arbs) == 0, f"expected the ~12.15% arb to be excluded by MAX_SANE_PROFIT_PERCENT ({MAX_SANE_PROFIT_PERCENT}), got {len(arbs)}"
 
 
 def test_nfl_conflicting_favorite_spread_is_rejected():
@@ -310,6 +339,7 @@ ALL_TESTS = [
     test_real_moneyline_arb_is_found,
     test_real_totals_arb_is_found,
     test_nfl_true_complement_spread_is_found,
+    test_unrealistic_profit_percent_is_excluded,
     test_nfl_conflicting_favorite_spread_is_rejected,
     test_mlb_run_line_self_consistency_without_team_side,
     test_mlb_run_line_conflicting_favorite_is_rejected,

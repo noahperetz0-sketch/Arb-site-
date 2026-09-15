@@ -192,10 +192,22 @@ sportsbook apps) before these checks existed. All are covered by
   same-event predicate"), unlike also stripping the `_b{N}` start-time
   bucket, which they explicitly warn can merge two genuinely different
   same-day games into one — actively dangerous for arb detection.
-- **A sanity cap on profit** (25%) is applied regardless of source — real
-  cross-book arbs are almost always single-digit percentages, so anything
-  wildly above that is treated as more likely a data glitch than free
-  money and dropped rather than shown.
+- **A sanity cap on profit** (8%, was 25%) is applied regardless of source —
+  real cross-book arbs are almost always single-digit percentages, so
+  anything wildly above that is treated as more likely a data glitch than
+  free money and dropped rather than shown. Lowered after two confirmed
+  real WNBA pregame moneyline incidents that a 25% cap let straight
+  through — both implicating Caesars specifically: a 12.15% "arb" where
+  Caesars showed Dallas Wings at -159 against a real price of -325, and a
+  19.68% one where Caesars showed Minnesota Lynx at -118 against a
+  similarly bad real price. Neither tripped SharpAPI's own
+  `possibly_stale`/`warnings` flags on the paid-endpoint path — that path
+  exposes no per-leg `timestamp` to cross-check independently the way
+  `/odds` does, so this cap is the only remaining line of defense against
+  that specific failure mode. 8% still comfortably clears legitimate
+  soft-book arbs (which run a bit hotter than major-book-only pairs,
+  especially in thinner markets like WNBA) while catching both incidents,
+  which were nowhere near single digits.
 - **Book selection and sport/league scope are enforced server-side**,
   independent of whatever SharpAPI's own query filters actually do.
 - **A short server-side cache (3s)** prevents rapid toggle-clicking or
