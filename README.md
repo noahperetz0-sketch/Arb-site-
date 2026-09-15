@@ -45,6 +45,13 @@ To run the regression tests instead of the site: `python tests.py`.
    from sample data to live data once a key is present.
 
 ## What the site actually does
+- **Arb results render as a dense data table** (League / Market / Game /
+  Profit / Legs columns), not stacked cards — deliberately modeled after
+  professional scanner tools, since a wide scannable table reads much
+  faster than a tall list once a busy slate (NBA season) has many
+  simultaneous arbs to get through. Each leg shows a colored sportsbook
+  badge, selection, odds, stake $, and a compact "Bet ↗" link. Scrolls
+  horizontally on narrow viewports rather than reflowing to cards.
 - **Sport/league selection**: toggle any combination of sports on the
   homepage. Checking more than one sport scans every league within each of
   them (a single league picker doesn't make sense across different

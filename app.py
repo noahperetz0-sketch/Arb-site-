@@ -358,6 +358,7 @@ MOCK_ARBS = [
     {
         "event_name": "Lakers vs Celtics",
         "league": "NBA",
+        "market": "Moneyline",
         "profit_percent": 3.4,
         "event_start_time": "2026-10-22T23:30:00Z",
         "is_live": False,
@@ -369,6 +370,7 @@ MOCK_ARBS = [
     {
         "event_name": "Chiefs vs Broncos",
         "league": "NFL",
+        "market": "Point Spread (-2.5)",
         "profit_percent": 1.8,
         "event_start_time": "2026-09-15T00:15:00Z",
         "is_live": True,
@@ -488,7 +490,8 @@ def fetch_arbs_paid(min_profit=0.0, books=None, sport=None, league=None):
 
         arbs.append({
             "event_name": arb.get("event_name", ""),
-            "league": f"{league_label} · {market_label}" if league_label else market_label,
+            "league": league_label,
+            "market": market_label,
             "profit_percent": profit_percent,
             # Confirmed field is "start_time", not "event_start_time" (the
             # odds-scan path's field name) - reading the wrong key here
@@ -883,7 +886,8 @@ def compute_arbs_from_odds(rows, min_profit=0.0, books=None):
 
         arbs.append({
             "event_name": f"{away} @ {home}" if away and home else event_id,
-            "league": f"{league.upper()} · {market_label}" if league else market_label,
+            "league": league.upper() if league else "",
+            "market": market_label,
             "profit_percent": round(profit_percent, 2),
             "event_start_time": sample.get("event_start_time"),
             # Any leg reporting live also means the market itself is live -

@@ -19,7 +19,7 @@ body {
 }
 
 .wrap {
-  max-width: 760px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 24px 16px 80px;
 }
@@ -426,19 +426,6 @@ button#refreshBtn:disabled {
   vertical-align: middle;
 }
 
-.arb-event-time {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 2px;
-}
-
-.arb-profit-dollar {
-  font-size: 12px;
-  color: var(--muted);
-  text-align: right;
-  margin-top: 2px;
-}
-
 .status {
   display: flex;
   align-items: center;
@@ -468,6 +455,7 @@ button#refreshBtn:disabled {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  overflow-x: auto;
   transition: opacity 0.15s ease;
 }
 
@@ -475,117 +463,188 @@ button#refreshBtn:disabled {
   opacity: 0.55;
 }
 
-.arb-card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
-  animation: fade-in 0.25s ease;
-}
-
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.arb-card-header {
+/* Dense data-table layout for the arb list - built with CSS grid rows
+   rather than a real <table>, so the "Legs" column can hold a flexible
+   number of leg-chips (2-way markets are the common case, but a soccer
+   draw makes some arbs 3-way) without juggling colspans. The table
+   scrolls horizontally on narrow viewports rather than reflowing to
+   cards - a wide, scannable table is the whole point once there are many
+   simultaneous arbs (NBA season) to get through quickly. */
+.arb-table {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 10px;
+  flex-direction: column;
+  min-width: 720px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  animation: fade-in 0.2s ease;
+}
+
+.arb-table-header,
+.arb-row {
+  display: grid;
+  grid-template-columns: 64px 140px minmax(170px, 1.1fr) 110px minmax(300px, 2fr);
+  align-items: center;
   gap: 12px;
 }
 
-.arb-event {
-  font-weight: 600;
-  font-size: 15px;
-}
-
-.arb-league {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.arb-profit {
-  color: var(--green);
+.arb-table-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #1d2029;
+  padding: 10px 14px;
+  font-size: 11px;
   font-weight: 700;
-  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.arb-row {
+  padding: 12px 14px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.arb-row:last-child {
+  border-bottom: none;
+}
+
+.arb-row:nth-child(even) {
+  background: #1a1d25;
+}
+
+.arb-row:hover {
+  background: #20242f;
+}
+
+.td-league {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.td-market {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.game-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.game-time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.td-profit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.profit-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  background: rgba(61, 220, 132, 0.16);
+  color: var(--green);
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 13px;
   white-space: nowrap;
 }
 
-.legs-row {
+.profit-dollar {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.td-legs {
   display: flex;
-  align-items: stretch;
-  gap: 0;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-  margin-top: 4px;
   flex-wrap: wrap;
+  gap: 8px;
 }
 
-.leg-col {
-  flex: 1;
-  min-width: 130px;
-  text-align: center;
-  padding: 8px 10px;
-}
-
-.leg-divider {
+.leg-chip {
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  padding: 0 4px;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-width: 0;
+  flex: 1 1 260px;
 }
 
 .leg-book {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-size: 11px;
   font-weight: 700;
-  font-size: 14px;
-  margin-bottom: 4px;
+  white-space: nowrap;
 }
 
-.leg-selection {
-  color: var(--muted);
+.leg-sel {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
-  margin-bottom: 8px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .leg-odds {
+  flex-shrink: 0;
   font-weight: 700;
-  font-size: 16px;
-  margin-bottom: 4px;
+  font-size: 13px;
 }
 
 .leg-stake {
+  flex-shrink: 0;
+  font-size: 12px;
   color: var(--green);
   font-weight: 600;
-  font-size: 14px;
 }
 
-.leg-stake-pct {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.place-bet-btn {
-  display: inline-block;
-  margin-top: 10px;
-  padding: 6px 14px;
-  background: transparent;
-  border: 1px solid var(--accent);
-  border-radius: 20px;
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.place-bet-btn:hover {
+.leg-bet-btn {
+  flex-shrink: 0;
+  padding: 4px 10px;
   background: var(--accent);
   color: white;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: opacity 0.15s ease;
+}
+
+.leg-bet-btn:hover {
+  opacity: 0.85;
+}
+
+@media (max-width: 700px) {
+  .arb-table-header,
+  .arb-row {
+    grid-template-columns: 56px 110px minmax(150px, 1fr) 90px minmax(260px, 1.6fr);
+  }
 }
 
 .empty, .error-state {

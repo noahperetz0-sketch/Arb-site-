@@ -605,6 +605,20 @@ function formatEventTime(isoString) {
   });
 }
 
+// Deterministic color per book, from a fixed palette - no real sportsbook
+// logos are hosted here (an external asset dependency this app avoids),
+// so a stable colored badge is the substitute for "book logo" as a quick
+// visual anchor when scanning many rows.
+const BOOK_BADGE_COLORS = [
+  "#e5484d", "#5b8def", "#3ddc84", "#f5a524", "#a855f7",
+  "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16",
+];
+function bookBadgeColor(name) {
+  let hash = 0;
+  for (let i = 0; i < (name || "").length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return BOOK_BADGE_COLORS[hash % BOOK_BADGE_COLORS.length];
+}
+
 function renderArbs() {
   let totalStake = parseFloat(totalStakeInput.value);
   if (!Number.isFinite(totalStake) || totalStake < 0) totalStake = 0;
@@ -616,48 +630,60 @@ function renderArbs() {
     return;
   }
 
-  arbListEl.innerHTML = arbsToShow
+  const rowsHtml = arbsToShow
     .map((arb) => {
       const legsHtml = arb.legs
         .map((leg) => {
           const stakeAmount = (totalStake * (leg.stake_percent / 100)).toFixed(2);
-          const placeBetBtn = leg.deep_link
-            ? `<a class="place-bet-btn" href="${leg.deep_link}" target="_blank" rel="noopener noreferrer">Place Bet →</a>`
+          const betBtn = leg.deep_link
+            ? `<a class="leg-bet-btn" href="${leg.deep_link}" target="_blank" rel="noopener noreferrer">Bet ↗</a>`
             : "";
+          const name = escapeHtml(leg.sportsbook);
           return `
-            <div class="leg-col">
-              <div class="leg-book">${leg.sportsbook}</div>
-              <div class="leg-selection">${leg.selection}</div>
-              <div class="leg-odds">${leg.odds_american}</div>
-              <div class="leg-stake">Bet $${stakeAmount}</div>
-              <div class="leg-stake-pct">${leg.stake_percent.toFixed(1)}% of stake</div>
-              ${placeBetBtn}
+            <div class="leg-chip">
+              <span class="leg-book" style="background:${bookBadgeColor(leg.sportsbook)}22;color:${bookBadgeColor(leg.sportsbook)};border-color:${bookBadgeColor(leg.sportsbook)}55;">${name}</span>
+              <span class="leg-sel" title="${name}: ${escapeHtml(leg.selection)}">${escapeHtml(leg.selection)}</span>
+              <span class="leg-odds">${escapeHtml(leg.odds_american)}</span>
+              <span class="leg-stake">$${stakeAmount}</span>
+              ${betBtn}
             </div>
           `;
         })
-        .join(`<div class="leg-divider">vs</div>`);
+        .join("");
 
       const profitDollar = (totalStake * (arb.profit_percent / 100)).toFixed(2);
       const liveBadge = arb.is_live ? `<span class="live-badge">LIVE</span>` : "";
 
       return `
-        <div class="arb-card">
-          <div class="arb-card-header">
-            <div>
-              <div class="arb-event">${arb.event_name}${liveBadge}</div>
-              <div class="arb-league">${arb.league || ""}</div>
-              <div class="arb-event-time">${formatEventTime(arb.event_start_time)}</div>
-            </div>
-            <div>
-              <div class="arb-profit">+${arb.profit_percent.toFixed(2)}%</div>
-              <div class="arb-profit-dollar">+$${profitDollar} on $${totalStake.toFixed(2)}</div>
-            </div>
+        <div class="arb-row">
+          <div class="td td-league">${escapeHtml(arb.league) || "—"}</div>
+          <div class="td td-market">${escapeHtml(arb.market) || "—"}</div>
+          <div class="td td-game">
+            <div class="game-name">${escapeHtml(arb.event_name)}${liveBadge}</div>
+            <div class="game-time">${formatEventTime(arb.event_start_time)}</div>
           </div>
-          <div class="legs-row">${legsHtml}</div>
+          <div class="td td-profit">
+            <span class="profit-pill">+${arb.profit_percent.toFixed(2)}%</span>
+            <span class="profit-dollar">+$${profitDollar}</span>
+          </div>
+          <div class="td td-legs">${legsHtml}</div>
         </div>
       `;
     })
     .join("");
+
+  arbListEl.innerHTML = `
+    <div class="arb-table">
+      <div class="arb-table-header">
+        <div class="th th-league">League</div>
+        <div class="th th-market">Market</div>
+        <div class="th th-game">Game</div>
+        <div class="th th-profit">Profit</div>
+        <div class="th th-legs">Legs</div>
+      </div>
+      ${rowsHtml}
+    </div>
+  `;
 }
 
 function stopAutoRefresh() {
