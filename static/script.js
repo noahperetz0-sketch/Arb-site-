@@ -35,18 +35,22 @@ const SELECTED_BOOK_IDS_KEY = "arbScreenerSelectedBookIds";
 // "My List" - a personal shortlist of sports/books you actually use, so the
 // panel can be narrowed down to just those (still individually toggleable
 // within it) instead of scrolling the full catalog every time. Useful when
-// your SharpAPI plan caps how many books can be selected at once (e.g.
-// Hobby's 5-book cap) but you rotate between a wider set of ~10 you follow.
+// your book-selection cap (per-provider) limits how many can be active
+// at once but you rotate between a wider set you follow.
 const FAVORITE_SPORT_IDS_KEY = "arbScreenerFavoriteSportIds";
 const FAVORITE_BOOK_IDS_KEY = "arbScreenerFavoriteBookIds";
 const SPORTS_FAVORITES_ONLY_KEY = "arbScreenerSportsFavoritesOnly";
 const BOOKS_FAVORITES_ONLY_KEY = "arbScreenerBooksFavoritesOnly";
 
-// Confirmed rate limit for the Hobby plan (per SharpAPI's own docs):
-// 120 requests/minute. Duplicated from app.py's SHARPAPI_RATE_LIMIT_PER_MINUTE
-// (no shared config between backend/frontend in this app) - keep in sync
-// if the plan tier ever changes.
-const SHARPAPI_RATE_LIMIT_PER_MINUTE = 120;
+// UNCONFIRMED placeholder for this provider - The Odds API bills usage as
+// a monthly credit quota (cost = markets x regions per call), not a
+// requests-per-minute limit the way SharpAPI's Hobby plan was, so this
+// number doesn't map to anything real yet. Kept only so the existing
+// pacing math below still produces a sane-looking interval instead of
+// dividing by an unset value; replace once the account's actual plan
+// quota is confirmed, and redesign the pacing around a per-day/per-month
+// budget rather than per-minute (see app.py's MAX_LEAGUES_PER_SCAN).
+const ASSUMED_REQUESTS_PER_MINUTE_BUDGET = 120;
 
 // Auto-refresh interval scales with how many requests one scan actually
 // costs (sports x books, with a pagination fudge factor - see
@@ -58,16 +62,16 @@ const SHARPAPI_RATE_LIMIT_PER_MINUTE = 120;
 // you happened to narrow down to exactly one sport. Scaling the interval
 // instead means it always runs, just paced to stay within budget - a
 // heavier scan just refreshes less often rather than not at all.
-const MIN_AUTO_REFRESH_INTERVAL_MS = 8000; // matches SharpAPI's own suggested 5-10s cadence for live dashboards
-const AUTO_REFRESH_BUDGET_FRACTION = 0.5;  // use at most half the rate limit for auto-refresh, leaving room for manual Refresh clicks and other tabs
-const PAGINATION_FUDGE_FACTOR = 1.5;       // a busy slate can trigger multiple pages/book (see MAX_ODDS_PAGES_PER_BOOK in app.py) - pad the estimate rather than undercount
-const PREFERRED_DEFAULT_LEAGUE = "nfl";
+const MIN_AUTO_REFRESH_INTERVAL_MS = 8000; // a reasonable live-dashboard floor, not provider-specific
+const AUTO_REFRESH_BUDGET_FRACTION = 0.5;  // use at most half the assumed budget for auto-refresh, leaving room for manual Refresh clicks and other tabs
+const PAGINATION_FUDGE_FACTOR = 1.5;       // a busy slate can trigger more than one league call (see MAX_LEAGUES_PER_SCAN in app.py) - pad the estimate rather than undercount
+const PREFERRED_DEFAULT_LEAGUE = "americanfootball_nfl";
 
 function computeAutoRefreshIntervalMs() {
   const sportCount = Math.max(selectedSportIds.size, 1);
   const bookCount = Math.max(selectedBookIds.size, 1);
   const estimatedRequestsPerScan = sportCount * bookCount * PAGINATION_FUDGE_FACTOR;
-  const maxRequestsPerMinute = SHARPAPI_RATE_LIMIT_PER_MINUTE * AUTO_REFRESH_BUDGET_FRACTION;
+  const maxRequestsPerMinute = ASSUMED_REQUESTS_PER_MINUTE_BUDGET * AUTO_REFRESH_BUDGET_FRACTION;
   const minIntervalForBudgetMs = (estimatedRequestsPerScan / maxRequestsPerMinute) * 60000;
   return Math.max(MIN_AUTO_REFRESH_INTERVAL_MS, minIntervalForBudgetMs);
 }
@@ -251,7 +255,7 @@ async function loadSports() {
     );
 
     if (data.source === "error") {
-      showSportLeagueNote(`Couldn't reach SharpAPI's sports list (${data.error}) — showing a short fallback list instead.`);
+      showSportLeagueNote(`Couldn't reach The Odds API's sports list (${data.error}) — showing a short fallback list instead.`);
     }
 
     renderSportsPanel();
@@ -377,14 +381,14 @@ async function loadLeagues(sport) {
       leagueSelectEl.value = "all";
       showSportLeagueNote(
         data.source === "error"
-          ? `Couldn't reach SharpAPI's leagues list (${data.error}) — you can still pick "All Leagues" to scan broadly.`
-          : 'SharpAPI didn\'t return any specific leagues for this sport — you can still pick "All Leagues" to scan broadly.'
+          ? `Couldn't reach The Odds API's leagues list (${data.error}) — you can still pick "All Leagues" to scan broadly.`
+          : 'The Odds API didn\'t return any specific leagues for this sport — you can still pick "All Leagues" to scan broadly.'
       );
       return;
     }
 
     if (data.source === "error") {
-      showSportLeagueNote(`Couldn't reach SharpAPI's leagues list (${data.error}) — showing a fallback instead.`);
+      showSportLeagueNote(`Couldn't reach The Odds API's leagues list (${data.error}) — showing a fallback instead.`);
     } else {
       showSportLeagueNote(null);
     }
@@ -529,7 +533,7 @@ function renderBooksPanel() {
         // Lets you see at a glance why a toggled-on book might return
         // nothing - it needs a higher SharpAPI plan tier than you're on.
         const tierLabel = b.tier ? TIER_LABELS[b.tier] || b.tier : null;
-        const labelTitle = tierLabel ? ` title="Requires ${escapeHtml(tierLabel)} tier or higher on SharpAPI"` : "";
+        const labelTitle = tierLabel ? ` title="Requires a paid subscription on The Odds API"` : "";
         const isFav = favoriteBookIds.has(b.id);
         // The remove (x) and star buttons are siblings of the label, not
         // nested inside it - nesting a button inside a <label> wrapping a
@@ -710,11 +714,11 @@ async function loadArbs() {
     currentArbs = data.arbs || [];
 
     if (data.source === "mock") {
-      statusEl.textContent = "Showing sample data — add your SharpAPI key to see live arbs.";
+      statusEl.textContent = "Showing sample data — add your ODDS_API_KEY to see live arbs.";
     } else if (data.source === "error") {
-      statusEl.textContent = `Couldn't reach SharpAPI (${data.error}). Showing sample data instead.`;
+      statusEl.textContent = `Couldn't reach The Odds API (${data.error}). Showing sample data instead.`;
     } else if (data.rows_scanned === 0) {
-      statusEl.textContent = "SharpAPI returned no odds at all for this sport/league/book combination right now — try a different sport, league, or fewer restrictive book toggles.";
+      statusEl.textContent = "The Odds API returned no odds at all for this sport/league/book combination right now — try a different sport, league, or fewer restrictive book toggles.";
     } else {
       const shown = getFilteredArbs().length;
       statusEl.textContent = `Live data · ${shown} opportunit${shown === 1 ? "y" : "ies"} shown · updated ${new Date().toLocaleTimeString()}`;

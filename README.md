@@ -1,266 +1,118 @@
-# Arb Screener
+# Arb Screener — The Odds API build
 
-A personal website that scans live sportsbook odds via SharpAPI and shows
-you cross-book arbitrage opportunities, with a stake calculator and a
-one-click link to place each leg.
+This branch (`claude/odds-api-integration`) is a parallel build of the Arb
+Screener using **[The Odds API](https://the-odds-api.com)** instead of
+SharpAPI, kept on its own branch specifically so it can be compared
+side-by-side against the SharpAPI build on
+`claude/betting-arbitrage-site-zex0k3` — same UI, same arb-matching
+philosophy, different data provider.
 
-Right now it's running on **sample (fake) data** so you can see how it looks
-and works before connecting your real SharpAPI key.
+## Why this exists
 
-## What's in this project
-- `app.py` — the backend. Calls SharpAPI, matches odds across books into
-  arbitrage opportunities, and serves the page.
-- `tests.py` — regression tests for the arb-matching logic. **Run this
-  (`python tests.py`) before shipping any change to how arbs are matched.**
-  Every test in it is a real bug that was found and fixed — it exists so
-  none of them can quietly come back.
-- `templates/index.html` — the page you see in your browser.
-- `static/style.css` / `static/script.js` — styling and all the client-side
-  logic (sport/book toggles, auto-refresh, filters, rendering).
-- `Procfile` — tells Railway (or any Heroku-style host) to run the app with
-  `gunicorn` instead of Flask's dev server.
-- `.env.example` — the environment variables the app reads. Copy to `.env`
-  for local testing; never commit a real `.env`.
+The SharpAPI build kept returning wrong prices for a handful of books
+(Caesars, specifically) once real Ontario betting was compared against it.
+Root cause: SharpAPI's docs only ever showed US state codes for its
+region-scoping param, with no confirmed Ontario support — so books that
+vary by jurisdiction were silently defaulting to a Pennsylvania price. The
+Odds API, by contrast, has a documented `ca` region with genuine
+Ontario-specific bookmaker keys (the `_ca_on` suffix), confirmed straight
+from their own docs. This build tests whether that actually produces
+accurate arbs in practice.
 
-## Running it yourself
-1. Install Python if you don't have it.
-2. In a terminal, inside this folder, run:
-   ```
-   pip install -r requirements.txt
-   python app.py
-   ```
-3. Open `http://localhost:5000` in your browser.
+## What's different from the SharpAPI build
 
-To run the regression tests instead of the site: `python tests.py`.
+- **No pre-built arbitrage finder.** The Odds API only returns raw
+  per-bookmaker odds — there's no `/opportunities/arbitrage` equivalent.
+  All arb detection here (`compute_arbs_from_events` in `app.py`) is done
+  by this app, adapting the same "best price per complementary side,
+  grouped by a line-agnostic canonical key" approach proven in the SharpAPI
+  build's `compute_arbs_from_odds`.
+- **Usage is a monthly credit quota, not a requests-per-minute limit.**
+  Cost per call = `markets × regions` (or `markets × ⌈bookmakers/10⌉` when
+  using an explicit bookmaker list). The exact quota for this account's
+  plan isn't confirmed yet — the auto-refresh pacing in `static/script.js`
+  (`ASSUMED_REQUESTS_PER_MINUTE_BUDGET`) is a clearly-flagged placeholder
+  until that's known, not a real budget calculation.
+- **Sport + league is one flat key** (e.g. `americanfootball_nfl`), not
+  SharpAPI's separate sport/league pair. This app maps The Odds API's
+  `group` field (e.g. "American Football") onto the existing Sport filter
+  concept, and each `key` within a group onto the existing League dropdown
+  — so the UI itself didn't need to change.
+- **No staleness flags at all.** SharpAPI had `is_stale_pregame_price` and
+  a documented set of `warnings`/`possibly_stale` codes; The Odds API gives
+  only a `last_update` timestamp per bookmaker/market, no derived
+  freshness signal. `MAX_SANE_PROFIT_PERCENT` (8%, same value and
+  reasoning as the SharpAPI build after its own real-world tightening) is
+  the only defense here against a mismatched/stale price producing a fake
+  arb.
+- **No "Bet ↗" deep links yet.** The Odds API's `includeLinks` param
+  reportedly adds bookmaker betslip links "if available", but the exact
+  response field name isn't confirmed from the docs pasted into this
+  build — `deep_link` is left `null` rather than guessing a field name
+  that might not exist. The frontend already hides the Bet button when
+  this is null, so nothing breaks — the button's just absent for now.
+- **Book catalog is fully static.** SharpAPI had a live `/sportsbooks`
+  endpoint; The Odds API has no equivalent, so `/api/books` here is served
+  entirely from `BOOKMAKER_CATALOG` in `app.py`, transcribed from their
+  "Supported Bookmakers" docs page.
 
-## Connecting your real SharpAPI key
-1. Set an environment variable called `SHARPAPI_KEY` to your key. (Never
-   paste it directly into the code or share it in chat — if it's ever been
-   exposed, e.g. in a screenshot, regenerate it in your SharpAPI dashboard.)
-2. Set `SHARPAPI_BOOKS` to the exact sportsbook ids you picked in your
-   SharpAPI dashboard (comma-separated, no spaces) if they ever change —
-   the default in `.env.example` is betrivers, fanduel, betmgm, draftkings,
-   betano.
-3. Restart the site (or, on Railway, redeploy). It automatically switches
-   from sample data to live data once a key is present.
+## Default book set
 
-## What the site actually does
-- **Arb results render as a dense data table** (League / Market / Game /
-  Profit / Legs columns), not stacked cards — deliberately modeled after
-  professional scanner tools, since a wide scannable table reads much
-  faster than a tall list once a busy slate (NBA season) has many
-  simultaneous arbs to get through. Each leg shows a colored sportsbook
-  badge, selection, odds, stake $, and a compact "Bet ↗" link. Scrolls
-  horizontally on narrow viewports rather than reflowing to cards.
-- **Sport/league selection**: toggle any combination of sports on the
-  homepage. Checking more than one sport scans every league within each of
-  them (a single league picker doesn't make sense across different
-  sports); checking exactly one sport reveals a League dropdown, including
-  an "All Leagues" option. Checking 2+ sports multiplies the number of API
-  requests per scan, so **auto-refresh paces itself to a slower interval**
-  instead of running at the default cadence — it no longer hard-disables
-  itself the way it originally did. That older behavior was a real bug in
-  practice: this site's own default sport selection preselects 6 sports
-  simultaneously, so auto-refresh was silently off from the very first
-  page load for nearly everyone, unless they happened to narrow down to
-  exactly one sport - easy to mistake for "auto-refresh doesn't work" (it
-  looked exactly like that) rather than "auto-refresh is deliberately off
-  right now." The interval now scales to stay within the 120 req/min
-  budget at any sport/book combination (as low as 8s with one sport
-  selected, matching SharpAPI's own suggested cadence for live dashboards;
-  up to a few minutes if "All Sports" is selected) rather than an all-or-
-  nothing switch.
-- **Sportsbook toggles**: pick which of your books to scan. Enforced twice
-  — sent to SharpAPI's filter, and independently re-checked on every
-  returned leg, so a book you didn't select can never appear in a result
-  even if SharpAPI's own filter is ignored or misparsed. Beyond the 5 books
-  in `SHARPAPI_BOOKS`, every other sportsbook is offered as an unchecked
-  toggle, tagged with the SharpAPI plan tier it requires (Free/Hobby/Pro/
-  Sharp) — live-fetched from SharpAPI's own confirmed-real
-  `/api/v1/sportsbooks` endpoint (`get_sportsbook_list()` in `app.py`), so
-  a brand-new book shows up automatically without a code change; falls
-  back to `SPORTSBOOK_CATALOG`, a static list hand-transcribed from
-  SharpAPI's "Supported Sportsbooks" docs page, if that live call fails.
-  Toggling one on only pulls data once it's actually active for your
-  account — and that's gated *two* independent ways on SharpAPI's side, not
-  just plan tier: a book can be within your tier but still return nothing
-  if it isn't turned on in your SharpAPI dashboard's own book selection.
-  The status line tells the two apart (see `book_issues` above) instead of
-  both just looking like silence. Worth knowing: SharpAPI also caps how
-  many books can be *simultaneously selected* per tier, separate from
-  which books your tier can reach at all — Free 2, **Hobby 5** (confirmed
-  — this is exactly why this site's plan has 5 books configured, not an
-  arbitrary choice), Pro 15, Sharp 25, Enterprise unlimited. So no matter
-  how many toggles this site shows, only that many can be active on
-  SharpAPI's side at once — switching to a new book means deselecting one
-  of your current ones in the SharpAPI dashboard first. For anything missing entirely (e.g. a
-  brand-new addition before either list picks it up), there's also an "Add
-  a sportsbook" box in the Sportsbooks panel — type the exact id from your
-  SharpAPI dashboard to add a toggle for it immediately. Custom-added books
-  and your current toggle selections are both remembered in the browser
-  (localStorage) across visits.
-- **Sports and Sportsbooks panels collapse independently** of each other
-  and of the outer Filters panel, so you can close one while working on
-  the other instead of everything competing for space at once.
-- **Sports and Sportsbooks panels sort alphabetically** and each has a
-  **"My List"** shortlist: click the ☆ on any sport/book to star it, then
-  check "★ My List" above that panel to narrow it down to just your
-  starred items — still individually toggleable on/off within that
-  narrowed view, and "Select All"/"Deselect All" only act on what's
-  currently visible. Useful when your SharpAPI plan caps how many books
-  can be selected at once (e.g. Hobby's 5-book cap) but you rotate between
-  a wider set you actually follow — star your ~10, then toggle 5 at a time
-  without hunting through the full 40+ book catalog each time. Stars and
-  the "My List" on/off state are both remembered in the browser
-  (localStorage) across visits, independently for sports and books.
-- **Live/Pre-match filter, minimum profit filter, and sort order**: all
-  filter/reorder the currently-loaded results client-side, no extra API
-  call. The minimum-profit filter matters once a busier slate (NBA season,
-  multiple simultaneous games) is producing more arbs at once than a
-  quick glance can parse — set it to e.g. 1% to cut the noise. Sort
-  defaults to highest profit first (already the order the backend returns
-  them in); "Starting soonest" re-sorts by event start time instead, for
-  prioritizing what needs action first.
-- **Place Bet button**: opens SharpAPI's deep link for that leg on that
-  sportsbook in a new tab, when one is available. BetMGM, Caesars, and
-  BetRivers have state-dependent deep link domains (confirmed in
-  SharpAPI's docs) — set `SHARPAPI_STATE` to your two-letter state code so
-  those resolve correctly. If unset, SharpAPI defaults to `pa`
-  (Pennsylvania) server-side, which is almost certainly wrong for you.
-  Every deep link also carries a `?fallback=` param pointing at a search
-  for the sportsbook's name, so a link that's gone stale by click time
-  (the original BetRivers bug) lands somewhere useful instead of
-  SharpAPI's raw `{"error": {"code": "not_found", ...}}` JSON.
-- **$ profit + event start time**: shown on every card alongside the
-  percentage, recalculating live as you change your total stake.
+```
+fanduel, draftkings, betmgm_ca_on, betrivers_ca_on, betano_ca_on, espnbet (theScore Bet)
+```
 
-## How data accuracy is enforced
-This is the part that's mattered most in practice — SharpAPI's raw odds
-data has real inconsistencies between sports and books, and several bugs
-were found (via real prices caught mismatched against the actual
-sportsbook apps) before these checks existed. All are covered by
-`tests.py`.
+FanDuel, DraftKings, and theScore Bet are pulled from their US-wide keys —
+confirmed accurate for Ontario by direct real-world comparison against the
+SharpAPI build, which never caught a bad price on any of these three across
+several real incidents that *did* catch Caesars/BetMGM/BetRivers being
+wrong. BetMGM, BetRivers, and Betano use their `_ca_on` Ontario-specific
+keys instead, since those books are confirmed to have real per-jurisdiction
+pricing differences.
 
-- **Every leg of an arb must be a different sportsbook.** If only one book
-  has data for a market, "best price per side" would trivially come from
-  that same book on both sides — not a real hedge, and not something you
-  could actually place (the book would notice and void/limit it).
-- **Spread-market legs must be true complements, not just matching
-  magnitude.** Two books can each list their own team as favored by the
-  same amount for the same market (e.g. one book has the home team -0.5,
-  another independently has the away team -0.5) — both are "my team wins
-  outright" bets, not opposite sides of one proposition. If the segment
-  ties, neither actually wins. Every row's line is normalized relative to
-  the home team before matching, so only genuine complements pair up.
-- **Player-prop markets are excluded entirely**, checked two ways
-  (SharpAPI's own `is_player_prop` flag, and independently via the word
-  "player" in the market type) — market type alone doesn't say which
-  player a row is about. The flag alone isn't enough: SharpAPI computes it
-  by checking whether `market_type` *starts with* `player_` (confirmed in
-  their own docs), but period/segment-scoped player props are named like
-  `1st_half_player_passing_yards` — "player" appears mid-string after the
-  segment prefix, so the flag reads `false` on every one of them. The
-  substring check is what actually catches those.
-- **Stale prices are dropped** before ever being compared, using
-  SharpAPI's own staleness flag — an old, unrefreshed price can otherwise
-  look attractive purely because it hasn't caught up to the real number.
-- **Live prices are separately checked for staleness by age.** SharpAPI's
-  staleness flag only covers pregame prices — a real live soccer "Total
-  Goals" market once showed a BetRivers leg at -155 (flag said not stale)
-  when the actual live line had already moved to -560, almost certainly
-  right after a goal, producing a fake ~20% "arb" that wasn't real (the
-  Place Bet deep link 404'd — the book had already invalidated that quote).
-  Any live row older than 10 seconds is now dropped, using its own
-  timestamp field, since no equivalent "stale live price" flag exists.
-  Confirmed honest limitation (SharpAPI's own docs): this catches a row
-  the pipeline hasn't recently re-touched, but can't catch a poll-based
-  book (DraftKings, BetMGM, Caesars, BetRivers, Betano — all this site's
-  plan books) being behind real-world reality even on a "fresh" row —
-  `timestamp` advances every ingest cycle regardless of whether the
-  underlying price changed. DraftKings' own book-to-SharpAPI collection
-  lag alone is ~8s p50 / ~21s p95. Only Pinnacle (push-based, Sharp tier,
-  $399/mo) closes this gap, which is above this site's plan — a real,
-  currently-irreducible risk on the softbook-only side of live detection.
-- **Cross-book event matching handles a doubleheader-suffix split.**
-  SharpAPI's own canonical `event_id` can differ for the *same* physical
-  game across books — one book reports both games of a same-day
-  doubleheader in one update (getting a `_g{N}`-suffixed id), another
-  sees only one game (getting the bare id). Grouping strictly by raw
-  `event_id` would silently miss a real arb whenever that split occurs.
-  Fixed by stripping only the trailing `_g{N}` suffix before grouping —
-  confirmed by SharpAPI's own docs as safe ("mirrors the server-side
-  same-event predicate"), unlike also stripping the `_b{N}` start-time
-  bucket, which they explicitly warn can merge two genuinely different
-  same-day games into one — actively dangerous for arb detection.
-- **A sanity cap on profit** (8%, was 25%) is applied regardless of source —
-  real cross-book arbs are almost always single-digit percentages, so
-  anything wildly above that is treated as more likely a data glitch than
-  free money and dropped rather than shown. Lowered after two confirmed
-  real WNBA pregame moneyline incidents that a 25% cap let straight
-  through — both implicating Caesars specifically: a 12.15% "arb" where
-  Caesars showed Dallas Wings at -159 against a real price of -325, and a
-  19.68% one where Caesars showed Minnesota Lynx at -118 against a
-  similarly bad real price. Neither tripped SharpAPI's own
-  `possibly_stale`/`warnings` flags on the paid-endpoint path — that path
-  exposes no per-leg `timestamp` to cross-check independently the way
-  `/odds` does, so this cap is the only remaining line of defense against
-  that specific failure mode. 8% still comfortably clears legitimate
-  soft-book arbs (which run a bit hotter than major-book-only pairs,
-  especially in thinner markets like WNBA) while catching both incidents,
-  which were nowhere near single digits.
-- **Book selection and sport/league scope are enforced server-side**,
-  independent of whatever SharpAPI's own query filters actually do.
-- **A short server-side cache (3s)** prevents rapid toggle-clicking or
-  multiple open tabs from burning through the API's rate limit (Hobby plan:
-  120 requests/minute, confirmed against SharpAPI's own docs). Kept
-  deliberately short (was 8s) since it directly stacks with the other
-  layers between a real price change and what's on screen - see "Live
-  prices are separately checked for staleness by age" below for the full
-  accounting of where that latency actually comes from.
-- **Odds requests follow pagination** (up to 3 pages, 600 rows, per book
-  per scan) instead of reading only the first 200-row page. A busy NBA
-  slate alone — a dozen games × ~40+ non-prop rows each across full-game
-  and quarter/half markets — already exceeds 200 rows before a single
-  player-prop row (fetched but discarded) enters the budget. Reading only
-  page 1 would have silently truncated some games out of the scan
-  entirely on exactly the nights with the most real arbs to find.
+**Known gap**: Bally Bet, Betway, and Caesars have no Ontario-specific key
+in The Odds API's catalog either (same situation as FanDuel/DraftKings —
+only a US or UK key exists) but haven't been validated the way FD/DK/
+theScore Bet have. Treat any arb involving those three as unverified until
+spot-checked against the real sportsbook.
 
-## A note on the SharpAPI integration
-The confirmed-real endpoint `/api/v1/odds` (sport + optional league +
-sportsbook) is what all arb-matching is actually built on. A pre-computed
-`/api/v1/opportunities/arbitrage` endpoint is attempted first as a bonus -
-fully confirmed and field-checked against SharpAPI's own docs (Hobby tier
-or higher, which this site's plan is): `sport`/`league`/`market`/
-`min_profit`/`state` are all real params now passed through correctly,
-its warning flags (`LIVE_HIGH_PROFIT_SUSPICIOUS`, `HIGH_PROFIT_SUSPICIOUS`,
-`LIVE_STALE_ODDS`, `POTENTIALLY_STALE_ODDS`, `VERY_STALE_ODDS`, and the
-reserved `LOW_IMPLIED_TOTAL`) are matched exactly rather than
-substring-guessed, and player props are excluded on this path too (they
-weren't before). Still falls back to the `/odds`-based matching on any
-failure. `/api/v1/sports`, `/api/v1/leagues`, and `/api/v1/sportsbooks`
-(for the sport/league dropdowns and the sportsbook toggle catalog) are all
-confirmed-real too, each with a small hardcoded fallback if the live call
-fails.
+## Setup
 
-**Two separate ways a book can return nothing**, per SharpAPI's documented
-error codes: `tier_restricted` (your plan tier doesn't cover this book at
-all) vs `book_not_selected` (your tier does cover it, but it isn't turned
-on in your SharpAPI dashboard's own book selection - a second, independent
-gate beyond this site's own toggles). `/api/arbs` surfaces which books hit
-which reason as `book_issues` in its response, shown in the status line as
-"Skipped: <book> (<reason>)" instead of silent emptiness.
+1. Copy `.env.example` to `.env` (or set the same variables in Railway's
+   Variables tab).
+2. Set `ODDS_API_KEY` to your key from
+   [the-odds-api.com](https://the-odds-api.com).
+3. `ODDS_API_BOOKS` defaults to the set above — override if you want a
+   different starting selection (the Sportsbooks panel's toggles and "My
+   List" work the same as the SharpAPI build regardless).
+4. `python app.py` to run locally, or let Railway auto-deploy from this
+   branch.
 
-If something looks wrong, `/api/test-odds` is a diagnostic route that
-confirms whether the API key and sport/league params work at all against
-the confirmed `/odds` endpoint.
+Without a key set, the app serves mock/sample data (same fallback pattern
+as the SharpAPI build) rather than failing outright.
 
-## Deploying (Railway example)
-1. Create a free account at railway.app
-2. "New Project" → "Deploy from GitHub repo", pointing at this repo's
-   branch
-3. In the project's "Variables" tab, add `SHARPAPI_KEY` (and `SHARPAPI_BOOKS`
-   if needed)
-4. Railway detects the `Procfile` and runs the app with gunicorn
-   automatically
-5. Under Settings → Networking, "Generate Domain" for a public URL
-6. Enable auto-deploy on the branch so future pushes redeploy automatically
+## Testing
+
+```
+python tests.py
+```
+
+13 tests covering: same-book rejection, cross-book moneyline/spread/totals
+matching, true-complement vs. conflicting-favorite spread detection,
+mismatched total-line rejection, the profit sanity cap, live-event
+detection, and the core schema-adaptation helpers
+(`_selection_side`, `_canonical_point`, `_american_to_decimal`,
+`_format_selection`). All fixtures use realistic, single-digit profit
+percentages — matching the same lesson learned in the SharpAPI build,
+where an earlier test fixture's unrealistic odds accidentally validated
+the wrong thing once the sanity cap was tightened.
+
+## Open questions
+
+- **Actual quota for this account's plan** — needed to design real
+  auto-refresh pacing instead of the placeholder currently in place.
+- **`includeLinks` response shape** — needed to wire up the "Bet ↗"
+  button; not yet confirmed from docs.
+- **Whether Bally Bet/Betway/Caesars are trustworthy without a
+  jurisdiction-specific key** — only FanDuel/DraftKings/theScore Bet have
+  been validated so far.

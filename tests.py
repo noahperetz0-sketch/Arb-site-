@@ -1,357 +1,279 @@
-"""Regression tests for the arb-matching logic in app.py.
+"""Regression tests for the arb-matching logic in app.py (The Odds API build).
 
-Every case here is a real bug found and fixed during development - not
-hypothetical. Run this before pushing any change to compute_arbs_from_odds,
-_canonical_line, or _legs_form_valid_arb:
+Mirrors the same matching philosophy proven in this project's SharpAPI
+build - every case here is either a real bug caught during that build (and
+re-tested here since the matching logic was rewritten from scratch for a
+different schema) or one specific to this provider's response shape.
 
     python tests.py
-
-No test framework dependency on purpose (keeps requirements.txt minimal) -
-plain functions, plain asserts, a runner at the bottom.
 """
 
-from datetime import datetime, timedelta, timezone
-
 from app import (
-    compute_arbs_from_odds,
-    _canonical_line,
-    _canonical_event_id,
-    _legs_form_valid_arb,
-    _is_stale_live_row,
-    _format_leg_selection,
-    MAX_LIVE_ROW_AGE_SECONDS,
+    compute_arbs_from_events,
+    _selection_side,
+    _canonical_point,
+    _american_to_decimal,
+    _format_selection,
     MAX_SANE_PROFIT_PERCENT,
 )
 
 
-def _row(**overrides):
-    """A minimally-valid odds row, with sane defaults for every field
-    compute_arbs_from_odds reads, so each test only needs to specify what's
-    different about it."""
+def _event(**overrides):
     base = {
-        "event_id": "e1",
-        "market_type": "moneyline",
-        "selection_type": "home",
-        "sportsbook": "draftkings",
-        "selection": "Team A",
-        "odds_decimal": 2.0,
-        "odds_american": 100,
-        "line": None,
-        "is_active": True,
-        "is_player_prop": False,
-        "is_stale_pregame_price": False,
-        "is_live": False,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "id": "evt1",
+        "sport_key": "americanfootball_nfl",
+        "commence_time": "2026-09-20T18:00:00Z",  # future - not live
         "home_team": "Team A",
         "away_team": "Team B",
-        "league": "nfl",
+        "bookmakers": [],
     }
     base.update(overrides)
     return base
 
 
+def _bookmaker(key, title, markets):
+    return {"key": key, "title": title, "markets": markets}
+
+
 def test_same_book_is_rejected():
-    """Bug: a market where only one book has data would compare that
-    book's own two prices against each other and could show a fake arb."""
-    rows = [
-        _row(sportsbook="betmgm", selection_type="home", market_type="point_spread",
-             line=-2.5, odds_decimal=2.5, odds_american=150, selection="A"),
-        _row(sportsbook="betmgm", selection_type="away", market_type="point_spread",
-             line=2.5, odds_decimal=2.05, odds_american=105, selection="B"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="betmgm,fanduel")
+    """A market where only one book has data would compare that book's own
+    two prices against each other and could show a fake arb."""
+    event = _event(bookmakers=[
+        _bookmaker("betmgm_ca_on", "BetMGM (Ontario)", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": 150},
+                {"name": "Team B", "price": -170},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"betmgm_ca_on", "fanduel"}, {})
     assert len(arbs) == 0, f"expected 0 arbs (same book both sides), got {len(arbs)}"
 
 
-def test_different_players_are_rejected():
-    """Bug: two different WNBA players' point props shared a market_type
-    and is_player_prop was unset on the row, so they got matched as if
-    they were one 2-way market."""
-    rows = [
-        _row(event_id="e2", sportsbook="fanduel", market_type="1st_quarter_player_points",
-             selection_type="under", line=3.5, odds_decimal=2.2, odds_american=120,
-             selection="Player1 Under", league="wnba"),
-        _row(event_id="e2", sportsbook="fanduel", market_type="1st_quarter_player_points",
-             selection_type="over", line=3.5, odds_decimal=1.94, odds_american=-106,
-             selection="Player2 Over", league="wnba"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="fanduel")
-    assert len(arbs) == 0, f"expected 0 arbs (different players), got {len(arbs)}"
-
-
 def test_real_moneyline_arb_is_found():
-    rows = [
-        _row(event_id="e3", sportsbook="draftkings", selection_type="home",
-             odds_decimal=2.0, odds_american=100, selection="A"),
-        _row(event_id="e3", sportsbook="fanduel", selection_type="away",
-             odds_decimal=2.2, odds_american=120, selection="B"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,fanduel")
-    assert len(arbs) == 1, f"expected 1 real cross-book moneyline arb, got {len(arbs)}"
+    """Two different books, complementary h2h sides, genuine arb. Odds
+    chosen to keep profit_percent realistic (~6%, comfortably under
+    MAX_SANE_PROFIT_PERCENT) - a genuine arb of this kind rather than an
+    implausibly large one, which the sanity cap would (correctly) reject."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": 120},
+                {"name": "Team B", "price": -125},
+            ]},
+        ]),
+        _bookmaker("betmgm_ca_on", "BetMGM (Ontario)", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": -110},
+                {"name": "Team B", "price": 105},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "betmgm_ca_on"}, {})
+    assert len(arbs) == 1, f"expected 1 moneyline arb, got {len(arbs)}"
+    assert arbs[0]["market"] == "Moneyline"
+    assert len(arbs[0]["legs"]) == 2
 
 
-def test_real_totals_arb_is_found():
-    rows = [
-        _row(event_id="e4", sportsbook="draftkings", market_type="total_points",
-             selection_type="over", line=20.5, odds_decimal=2.0, odds_american=100,
-             selection="Over"),
-        _row(event_id="e4", sportsbook="fanduel", market_type="total_points",
-             selection_type="under", line=20.5, odds_decimal=2.2, odds_american=120,
-             selection="Under"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,fanduel")
-    assert len(arbs) == 1, f"expected 1 real cross-book totals arb, got {len(arbs)}"
+def test_disallowed_book_is_excluded():
+    """A bookmaker present in the API response but not in the user's
+    selected/toggled books must never contribute a leg."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": 130},
+                {"name": "Team B", "price": -140},
+            ]},
+        ]),
+        _bookmaker("draftkings", "DraftKings", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": -110},
+                {"name": "Team B", "price": 120},
+            ]},
+        ]),
+    ])
+    # Only fanduel selected - draftkings' better complementary price must
+    # not be used even though it would otherwise form a real arb.
+    arbs = compute_arbs_from_events([event], {"fanduel"}, {})
+    assert len(arbs) == 0, f"expected 0 arbs (only one allowed book had data), got {len(arbs)}"
 
 
-def test_nfl_true_complement_spread_is_found():
-    """Broncos -0.5 (away, favored) and Chiefs +0.5 (home, underdog) are
-    genuine complements of ONE proposition - this must still be found."""
-    rows = [
-        # Odds chosen to keep profit_percent comfortably under
-        # MAX_SANE_PROFIT_PERCENT (a real cross-book arb this size is
-        # itself realistic - unlike the earlier 2.55/1.95 pairing, which
-        # implied a >10% profit no genuine arb of this kind produces) so
-        # this test still isolates the true-complement-detection logic
-        # rather than tripping the sanity-cap filter.
-        _row(event_id="e5", market_type="1st_quarter_point_spread", sportsbook="betmgm",
-             selection_type="away", team_side="away", selection="Denver Broncos",
-             odds_decimal=2.20, odds_american=120, line=-0.5,
-             home_team="Kansas City Chiefs", away_team="Denver Broncos"),
-        _row(event_id="e5", market_type="1st_quarter_point_spread", sportsbook="draftkings",
-             selection_type="home", team_side="home", selection="KC Chiefs",
-             odds_decimal=1.95, odds_american=-105, line=0.5,
-             home_team="Kansas City Chiefs", away_team="Denver Broncos"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="betmgm,draftkings")
+def test_spread_true_complement_is_found():
+    """Home team -6.5 on one book, away team +6.5 on another - genuine
+    complements of the same line, must be found. Odds chosen so FanDuel
+    wins the home side and DraftKings wins the away side (a real two-book
+    hedge), with a modest, realistic profit_percent."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "spreads", "outcomes": [
+                {"name": "Team A", "price": -105, "point": -6.5},
+                {"name": "Team B", "price": -120, "point": 6.5},
+            ]},
+        ]),
+        _bookmaker("draftkings", "DraftKings", [
+            {"key": "spreads", "outcomes": [
+                {"name": "Team A", "price": -130, "point": -6.5},
+                {"name": "Team B", "price": 110, "point": 6.5},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "draftkings"}, {})
     assert len(arbs) == 1, f"expected 1 true-complement spread arb, got {len(arbs)}"
 
 
-def test_unrealistic_profit_percent_is_excluded():
-    """Bug: a real WNBA moneyline report - FanDuel had LA Sparks +260,
-    Caesars had Dallas Wings -159 - looked like a 12.15% arb and got shown,
-    but Caesars' actual price was -325 (confirmed by the user against the
-    live sportsbook). SharpAPI's own possibly_stale/warnings flags didn't
-    catch it on that (paid-endpoint) path, and MAX_SANE_PROFIT_PERCENT was
-    25.0 at the time - well above 12.15%, so this site's own sanity filter
-    didn't catch it either. These exact odds must now be excluded."""
-    rows = [
-        _row(event_id="e7", market_type="moneyline", sportsbook="fanduel",
-             selection_type="away", selection="LA Sparks",
-             odds_decimal=3.60, odds_american=260,
-             home_team="Dallas Wings", away_team="LA Sparks", league="wnba"),
-        _row(event_id="e7", market_type="moneyline", sportsbook="caesars",
-             selection_type="home", selection="Dallas Wings",
-             odds_decimal=1.629, odds_american=-159,
-             home_team="Dallas Wings", away_team="LA Sparks", league="wnba"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="fanduel,caesars")
-    assert len(arbs) == 0, f"expected the ~12.15% arb to be excluded by MAX_SANE_PROFIT_PERCENT ({MAX_SANE_PROFIT_PERCENT}), got {len(arbs)}"
-
-
-def test_nfl_conflicting_favorite_spread_is_rejected():
-    """Bug: DraftKings has the Chiefs (home) favored -0.5; BetMGM
-    independently has the Broncos (away) favored -0.5. Same magnitude,
-    but both are 'my team wins outright' bets, not true complements - if
-    the segment ties, neither cashes."""
-    rows = [
-        _row(event_id="e6", market_type="1st_quarter_point_spread", sportsbook="draftkings",
-             selection_type="home", team_side="home", selection="KC Chiefs",
-             odds_decimal=2.30, odds_american=130, line=-0.5,
-             home_team="Kansas City Chiefs", away_team="Denver Broncos"),
-        _row(event_id="e6", market_type="1st_quarter_point_spread", sportsbook="betmgm",
-             selection_type="away", team_side="away", selection="Denver Broncos",
-             odds_decimal=2.55, odds_american=155, line=-0.5,
-             home_team="Kansas City Chiefs", away_team="Denver Broncos"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,betmgm")
+def test_spread_conflicting_favorite_is_rejected():
+    """Bug pattern from the SharpAPI build, re-verified here: one book has
+    the home team favored -6.5, another independently has the AWAY team
+    favored -6.5 (i.e. point=-6.5 for the away outcome). Same magnitude,
+    but both are 'my team wins outright' bets, not true complements."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "spreads", "outcomes": [
+                {"name": "Team A", "price": -110, "point": -6.5},
+                {"name": "Team B", "price": -110, "point": 6.5},
+            ]},
+        ]),
+        _bookmaker("draftkings", "DraftKings", [
+            {"key": "spreads", "outcomes": [
+                {"name": "Team A", "price": 150, "point": 6.5},
+                {"name": "Team B", "price": -170, "point": -6.5},  # away team ALSO favored -6.5
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "draftkings"}, {})
     assert len(arbs) == 0, f"expected 0 arbs (books disagree on who's favored), got {len(arbs)}"
 
 
-def test_mlb_run_line_self_consistency_without_team_side():
-    """Bug: real MLB run_line rows have NO team_side field at all (unlike
-    NFL spreads), which silently defeated the original team_side-based
-    canonicalization. Must use selection_type instead, confirmed present
-    on every spread-type row seen across every sport so far."""
-    dodgers = _row(event_id="e7", market_type="1st_5_innings_run_line", sportsbook="betrivers",
-                    selection_type="away", selection="LA Dodgers", odds_decimal=1.629,
-                    odds_american=-159, line=-0.5, home_team="Cincinnati Reds",
-                    away_team="Los Angeles Dodgers", league="mlb")
-    reds = _row(event_id="e7", market_type="1st_5_innings_run_line", sportsbook="betrivers",
-                selection_type="home", selection="CIN Reds", odds_decimal=2.18,
-                odds_american=118, line=0.5, home_team="Cincinnati Reds",
-                away_team="Los Angeles Dodgers", league="mlb")
-    assert _canonical_line(dodgers) == _canonical_line(reds), (
-        "same-book Dodgers/Reds run line rows should canonicalize to the same value"
+def test_totals_over_under_arb_is_found():
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "totals", "outcomes": [
+                {"name": "Over", "price": -105, "point": 48.5},
+                {"name": "Under", "price": -115, "point": 48.5},
+            ]},
+        ]),
+        _bookmaker("espnbet", "theScore Bet", [
+            {"key": "totals", "outcomes": [
+                {"name": "Over", "price": -110, "point": 48.5},
+                {"name": "Under", "price": 130, "point": 48.5},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "espnbet"}, {})
+    assert len(arbs) == 1, f"expected 1 totals arb, got {len(arbs)}"
+    assert arbs[0]["market"] == "Total (48.5)"
+
+
+def test_mismatched_totals_points_are_not_matched():
+    """Two books quoting DIFFERENT total lines (48.5 vs 47.5) are not the
+    same market and must never be paired, however profitable it looks."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "totals", "outcomes": [
+                {"name": "Over", "price": -105, "point": 48.5},
+                {"name": "Under", "price": -115, "point": 48.5},
+            ]},
+        ]),
+        _bookmaker("espnbet", "theScore Bet", [
+            {"key": "totals", "outcomes": [
+                {"name": "Over", "price": 200, "point": 47.5},
+                {"name": "Under", "price": -110, "point": 47.5},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "espnbet"}, {})
+    assert len(arbs) == 0, f"expected 0 arbs (different total lines), got {len(arbs)}"
+
+
+def test_unrealistic_profit_percent_is_excluded():
+    """Same sanity-cap philosophy as the SharpAPI build - an implausibly
+    large implied profit is far more likely a data/matching problem than
+    free money."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": 260},
+                {"name": "Team B", "price": -159},
+            ]},
+        ]),
+        _bookmaker("betmgm_ca_on", "BetMGM (Ontario)", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": -400},
+                {"name": "Team B", "price": 700},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "betmgm_ca_on"}, {})
+    assert len(arbs) == 0, (
+        f"expected the outsized arb to be excluded by MAX_SANE_PROFIT_PERCENT "
+        f"({MAX_SANE_PROFIT_PERCENT}), got {len(arbs)}"
     )
 
 
-def test_mlb_run_line_conflicting_favorite_is_rejected():
-    """Same bug as test_nfl_conflicting_favorite_spread_is_rejected, but
-    for a sport/market where team_side is absent - this is the actual
-    reported case (BetRivers Dodgers -0.5 vs BetMGM Reds -0.5)."""
-    dodgers = _row(event_id="e8", market_type="1st_5_innings_run_line", sportsbook="betrivers",
-                    selection_type="away", selection="LA Dodgers", odds_decimal=1.629,
-                    odds_american=-159, line=-0.5, home_team="Cincinnati Reds",
-                    away_team="Los Angeles Dodgers", league="mlb")
-    reds_disagreeing = _row(event_id="e8", market_type="1st_5_innings_run_line", sportsbook="betmgm",
-                             selection_type="home", selection="CIN Reds", odds_decimal=3.4,
-                             odds_american=240, line=-0.5, home_team="Cincinnati Reds",
-                             away_team="Los Angeles Dodgers", league="mlb")
-    arbs = compute_arbs_from_odds([dodgers, reds_disagreeing], min_profit=0.0, books="betrivers,betmgm")
-    assert len(arbs) == 0, f"expected 0 arbs (BetMGM disagrees on who's favored), got {len(arbs)}"
+def test_live_event_is_flagged():
+    event = _event(commence_time="2020-01-01T00:00:00Z", bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": 120},
+                {"name": "Team B", "price": -125},
+            ]},
+        ]),
+        _bookmaker("betmgm_ca_on", "BetMGM (Ontario)", [
+            {"key": "h2h", "outcomes": [
+                {"name": "Team A", "price": -110},
+                {"name": "Team B", "price": 105},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "betmgm_ca_on"}, {})
+    assert len(arbs) == 1
+    assert arbs[0]["is_live"] is True, "expected a past commence_time to be flagged as live"
 
 
-def test_mlb_run_line_true_complement_is_found():
-    dodgers = _row(event_id="e9", market_type="1st_5_innings_run_line", sportsbook="betrivers",
-                    selection_type="away", selection="LA Dodgers", odds_decimal=1.629,
-                    odds_american=-159, line=-0.5, home_team="Cincinnati Reds",
-                    away_team="Los Angeles Dodgers", league="mlb")
-    reds_agreeing = _row(event_id="e9", market_type="1st_5_innings_run_line", sportsbook="betmgm",
-                          selection_type="home", selection="CIN Reds", odds_decimal=3.0,
-                          odds_american=200, line=0.5, home_team="Cincinnati Reds",
-                          away_team="Los Angeles Dodgers", league="mlb")
-    arbs = compute_arbs_from_odds([dodgers, reds_agreeing], min_profit=0.0, books="betrivers,betmgm")
-    assert len(arbs) == 1, f"expected 1 true-complement MLB run line arb, got {len(arbs)}"
+def test_selection_side_helper():
+    assert _selection_side("Team A", "Team A", "Team B") == "home"
+    assert _selection_side("Team B", "Team A", "Team B") == "away"
+    assert _selection_side("Draw", "Team A", "Team B") == "draw"
+    assert _selection_side("Someone Else", "Team A", "Team B") is None
 
 
-def test_stale_price_is_excluded():
-    """A stale row could otherwise be picked as the 'best' price for a
-    side purely because it looks more attractive, producing an arb
-    against a number that isn't actually live/bettable."""
-    rows = [
-        _row(event_id="e10", sportsbook="draftkings", selection_type="home",
-             odds_decimal=2.0, odds_american=100, selection="A"),
-        _row(event_id="e10", sportsbook="fanduel", selection_type="away",
-             odds_decimal=2.2, odds_american=120, selection="B", is_stale_pregame_price=True),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,fanduel")
-    assert len(arbs) == 0, f"expected 0 arbs (one leg is stale), got {len(arbs)}"
+def test_canonical_point_flips_away_side():
+    outcome_home = {"name": "Team A", "point": -6.5}
+    outcome_away = {"name": "Team B", "point": 6.5}
+    assert _canonical_point("spreads", outcome_home, "Team A", "Team B") == -6.5
+    assert _canonical_point("spreads", outcome_away, "Team A", "Team B") == -6.5
+    # totals: point is never flipped
+    assert _canonical_point("totals", {"name": "Over", "point": 48.5}, "Team A", "Team B") == 48.5
 
 
-def test_stale_live_price_is_excluded():
-    """Bug: real live soccer "Total Goals" data showed BetRivers at -155
-    (is_stale_pregame_price=False, since that flag only covers pregame
-    prices) when the actual live BetRivers line had already moved to -560,
-    almost certainly right after a goal - producing a fake ~20% "arb" that
-    wasn't real (the deep link 404'd - BetRivers had already invalidated
-    that quote). is_stale_pregame_price alone doesn't catch this; only the
-    live-row age check does."""
-    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=MAX_LIVE_ROW_AGE_SECONDS + 60)).isoformat()
-    rows = [
-        _row(event_id="e11", market_type="total_goals", sportsbook="draftkings",
-             selection_type="under", line=1.5, odds_decimal=4.38, odds_american=338,
-             selection="Under", is_live=True),
-        _row(event_id="e11", market_type="total_goals", sportsbook="betrivers",
-             selection_type="over", line=1.5, odds_decimal=1.645, odds_american=-155,
-             selection="Over", is_live=True, is_stale_pregame_price=False, timestamp=stale_ts),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,betrivers")
-    assert len(arbs) == 0, f"expected 0 arbs (live leg's price is stale), got {len(arbs)}"
+def test_american_to_decimal_helper():
+    assert round(_american_to_decimal(150), 4) == 2.5
+    assert round(_american_to_decimal(-150), 4) == round(1 + 100 / 150, 4)
+    assert _american_to_decimal(None) is None
+    assert _american_to_decimal(0) is None
 
 
-def test_fresh_live_arb_is_still_found():
-    """The live-staleness check must not blanket-reject every live arb -
-    only ones with an old timestamp."""
-    rows = [
-        _row(event_id="e12", market_type="total_goals", sportsbook="draftkings",
-             selection_type="under", line=1.5, odds_decimal=2.1, odds_american=110,
-             selection="Under", is_live=True),
-        _row(event_id="e12", market_type="total_goals", sportsbook="betrivers",
-             selection_type="over", line=1.5, odds_decimal=2.05, odds_american=105,
-             selection="Over", is_live=True),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,betrivers")
-    assert len(arbs) == 1, f"expected 1 real live arb (both legs fresh), got {len(arbs)}"
-
-
-def test_is_stale_live_row_helper():
-    now = datetime.now(timezone.utc)
-    fresh = _row(is_live=True, timestamp=now.isoformat())
-    stale = _row(is_live=True, timestamp=(now - timedelta(seconds=MAX_LIVE_ROW_AGE_SECONDS + 1)).isoformat())
-    missing_ts = _row(is_live=True, timestamp=None)
-    not_live = _row(is_live=False, timestamp=(now - timedelta(days=1)).isoformat())
-
-    assert _is_stale_live_row(fresh, now=now) is False
-    assert _is_stale_live_row(stale, now=now) is True
-    assert _is_stale_live_row(missing_ts, now=now) is True
-    assert _is_stale_live_row(not_live, now=now) is False
-
-
-def test_doubleheader_suffix_reunited_across_books():
-    """Bug: SharpAPI's own Event Matching docs confirm the SAME physical
-    doubleheader game can carry two different event_id strings across
-    books - one book reports both games of a same-day doubleheader in one
-    update (getting the _g{N}-suffixed id), another sees only one game
-    (getting the bare bucketed id). Grouping strictly by raw event_id
-    would silently miss a real cross-book arb whenever that split occurs."""
-    rows = [
-        _row(event_id="mlb_athletics_mariners_2026-05-02_b0", sportsbook="draftkings",
-             selection_type="home", odds_decimal=2.0, odds_american=100, selection="A"),
-        _row(event_id="mlb_athletics_mariners_2026-05-02_b0_g1", sportsbook="fanduel",
-             selection_type="away", odds_decimal=2.2, odds_american=120, selection="B"),
-    ]
-    arbs = compute_arbs_from_odds(rows, min_profit=0.0, books="draftkings,fanduel")
-    assert len(arbs) == 1, f"expected the doubleheader-suffix split to be reunited into 1 arb, got {len(arbs)}"
-
-
-def test_canonical_event_id_helper():
-    assert _canonical_event_id("mlb_athletics_mariners_2026-05-02_b0_g1") == "mlb_athletics_mariners_2026-05-02_b0"
-    assert _canonical_event_id("mlb_athletics_mariners_2026-05-02_b0") == "mlb_athletics_mariners_2026-05-02_b0"
-    assert _canonical_event_id("nba_celtics_lakers_2026-02-08_b3") == "nba_celtics_lakers_2026-02-08_b3"
-    assert _canonical_event_id(None) == ""
-    # Never strips the start-time bucket itself (_b{N}) - only a trailing
-    # doubleheader suffix (_g{N}) that comes after it.
-    assert _canonical_event_id("mlb_athletics_mariners_2026-05-02_b0") != "mlb_athletics_mariners_2026-05-02"
-
-
-def test_format_leg_selection_helper():
-    """Bug: a real tennis slate showed multiple totals legs all as bare
-    "Over"/"Under" with no line and no indication of which market - two
-    different "Total Sets"/"3rd Set Total Games" legs were indistinguishable
-    in the UI. SharpAPI's own "selection" field really is just the bare
-    word for totals (and just the bare team name for spreads), confirmed
-    against real rows - the line is always a separate field."""
-    # Totals: line + a unit word scraped from "Total <noun>" in the label.
-    assert _format_leg_selection("Under", "under", 2.5, "Total Sets (2.5)") == "Under 2.5 Sets"
-    assert _format_leg_selection("Over", "over", 12.5, "3Rd Set Total Games (12.5)") == "Over 12.5 Games"
-    # No "Total <noun>" pattern in the label - falls back to just the line,
-    # not a guessed unit.
-    assert _format_leg_selection("Over", "over", 2.5, "Something Else (2.5)") == "Over 2.5"
-    # Spreads: bare team name + signed line, no invented unit word.
-    assert _format_leg_selection("KC Chiefs", "home", -0.5, "Point Spread (-0.5)") == "KC Chiefs -0.5"
-    assert _format_leg_selection("DEN Broncos", "away", 0.5, "Point Spread (-0.5)") == "DEN Broncos +0.5"
-    # No usable numeric line (moneyline, draw, outright) - unchanged.
-    assert _format_leg_selection("Alex Barrena", None, None, "Moneyline") == "Alex Barrena"
-    assert _format_leg_selection("Draw", "draw", None, "Moneyline") == "Draw"
-    # selection_type absent (unconfirmed on the Arbitrage endpoint's legs)
-    # still works via the bare selection text itself.
-    assert _format_leg_selection("Under", None, 8.5, "Total Points (8.5)") == "Under 8.5 Points"
-
-
-def test_legs_form_valid_arb_helper():
-    assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "betmgm"}]) is False
-    assert _legs_form_valid_arb([{"sportsbook": "betmgm"}, {"sportsbook": "fanduel"}]) is True
+def test_format_selection_helper():
+    assert _format_selection("h2h", "Team A", None) == "Team A"
+    assert _format_selection("spreads", "Team A", -6.5) == "Team A -6.5"
+    assert _format_selection("spreads", "Team B", 6.5) == "Team B +6.5"
+    assert _format_selection("totals", "Over", 48.5) == "Over 48.5"
 
 
 ALL_TESTS = [
     test_same_book_is_rejected,
-    test_different_players_are_rejected,
     test_real_moneyline_arb_is_found,
-    test_real_totals_arb_is_found,
-    test_nfl_true_complement_spread_is_found,
+    test_disallowed_book_is_excluded,
+    test_spread_true_complement_is_found,
+    test_spread_conflicting_favorite_is_rejected,
+    test_totals_over_under_arb_is_found,
+    test_mismatched_totals_points_are_not_matched,
     test_unrealistic_profit_percent_is_excluded,
-    test_nfl_conflicting_favorite_spread_is_rejected,
-    test_mlb_run_line_self_consistency_without_team_side,
-    test_mlb_run_line_conflicting_favorite_is_rejected,
-    test_mlb_run_line_true_complement_is_found,
-    test_stale_price_is_excluded,
-    test_stale_live_price_is_excluded,
-    test_fresh_live_arb_is_still_found,
-    test_is_stale_live_row_helper,
-    test_doubleheader_suffix_reunited_across_books,
-    test_canonical_event_id_helper,
-    test_format_leg_selection_helper,
-    test_legs_form_valid_arb_helper,
+    test_live_event_is_flagged,
+    test_selection_side_helper,
+    test_canonical_point_flips_away_side,
+    test_american_to_decimal_helper,
+    test_format_selection_helper,
 ]
 
 
