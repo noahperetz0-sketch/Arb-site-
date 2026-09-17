@@ -270,10 +270,18 @@ def _slug(text):
 
 
 def get_leagues_for_group(raw_sports, group_slug):
+    """Excludes has_outrights leagues (e.g. 'NFL Super Bowl Winner',
+    'NCAAF Championship Winner') entirely - confirmed real bug: those keys
+    only support the outrights market (their /odds docs: "the market will
+    default to outrights if not specified"), so requesting h2h/spreads/
+    totals against one always 422s. This app doesn't do outright/futures
+    arb detection anyway (a multi-way futures market has no two-sided
+    complementary structure for compute_arbs_from_events to match), so
+    there's nothing useful behind that error to fix beyond not asking."""
     return [
         {"id": s["key"], "name": s.get("title", s["key"])}
         for s in raw_sports
-        if s.get("active", True) and _slug(s.get("group", "")) == group_slug
+        if s.get("active", True) and not s.get("has_outrights") and _slug(s.get("group", "")) == group_slug
     ]
 
 
@@ -549,7 +557,7 @@ def api_arbs():
     league_title_by_key = {s["key"]: s.get("title", s["key"]) for s in raw_sports}
 
     if scan_all_sports:
-        league_keys = [s["key"] for s in raw_sports if s.get("active", True)]
+        league_keys = [s["key"] for s in raw_sports if s.get("active", True) and not s.get("has_outrights")]
     elif scan_all_leagues:
         league_keys = []
         for gs in group_slugs:

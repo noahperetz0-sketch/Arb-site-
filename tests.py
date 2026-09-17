@@ -10,6 +10,7 @@ different schema) or one specific to this provider's response shape.
 
 from app import (
     compute_arbs_from_events,
+    get_leagues_for_group,
     _selection_side,
     _canonical_point,
     _american_to_decimal,
@@ -230,6 +231,28 @@ def test_live_event_is_flagged():
     assert arbs[0]["is_live"] is True, "expected a past commence_time to be flagged as live"
 
 
+def test_outright_only_leagues_are_excluded():
+    """Bug: 'All Leagues' scans included futures/outright-only sport keys
+    (e.g. 'americanfootball_nfl_super_bowl_winner'), which only support the
+    outrights market - requesting h2h/spreads/totals against one always
+    422s (confirmed against a real live response). This app doesn't do
+    outright arb detection, so those keys must never be offered as a
+    scannable league at all."""
+    raw_sports = [
+        {"key": "americanfootball_nfl", "group": "American Football", "title": "NFL",
+         "active": True, "has_outrights": False},
+        {"key": "americanfootball_nfl_super_bowl_winner", "group": "American Football",
+         "title": "NFL Super Bowl Winner", "active": True, "has_outrights": True},
+        {"key": "americanfootball_ncaaf_championship_winner", "group": "American Football",
+         "title": "NCAAF Championship Winner", "active": True, "has_outrights": True},
+    ]
+    leagues = get_leagues_for_group(raw_sports, "american_football")
+    league_ids = [l["id"] for l in leagues]
+    assert league_ids == ["americanfootball_nfl"], (
+        f"expected only the non-outright league, got {league_ids}"
+    )
+
+
 def test_selection_side_helper():
     assert _selection_side("Team A", "Team A", "Team B") == "home"
     assert _selection_side("Team B", "Team A", "Team B") == "away"
@@ -270,6 +293,7 @@ ALL_TESTS = [
     test_mismatched_totals_points_are_not_matched,
     test_unrealistic_profit_percent_is_excluded,
     test_live_event_is_flagged,
+    test_outright_only_leagues_are_excluded,
     test_selection_side_helper,
     test_canonical_point_flips_away_side,
     test_american_to_decimal_helper,
