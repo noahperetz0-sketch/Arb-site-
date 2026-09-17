@@ -6,7 +6,12 @@
   --muted: #9aa1ac;
   --green: #3ddc84;
   --red: #e5484d;
-  --accent: #5b8def;
+  /* Red instead of the SharpAPI build's blue, on purpose - the whole site
+     already funnels every interactive element (buttons, checked toggles,
+     focus borders, the Bet button) through this one variable, so changing
+     just this makes the two builds visually distinguishable at a glance
+     without touching every rule individually. */
+  --accent: #e5484d;
 }
 
 * { box-sizing: border-box; }

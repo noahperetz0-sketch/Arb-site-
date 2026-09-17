@@ -431,7 +431,7 @@ function updateScanScopeState() {
   const heavy = selectedSportIds.size > 1;
   if (heavy) {
     const intervalSeconds = Math.round(computeAutoRefreshIntervalMs() / 1000);
-    scanScopeNoteEl.textContent = `Scanning ${selectedSportIds.size} sports means one API request per sport per book selected — with your 120 requests/minute limit, auto-refresh paces itself to about every ${intervalSeconds}s while this many sports are selected, instead of the usual ${Math.round(MIN_AUTO_REFRESH_INTERVAL_MS / 1000)}s, so it stays within budget. Narrow to fewer sports for faster auto-refresh.`;
+    scanScopeNoteEl.textContent = `Scanning ${selectedSportIds.size} sports means one API request per league — auto-refresh paces itself to about every ${intervalSeconds}s while this many sports are selected, instead of the usual ${Math.round(MIN_AUTO_REFRESH_INTERVAL_MS / 1000)}s, using a placeholder budget (this provider's real usage quota isn't confirmed yet - see README). Narrow to fewer sports for faster auto-refresh.`;
     scanScopeNoteEl.hidden = false;
   } else {
     scanScopeNoteEl.hidden = true;
