@@ -186,6 +186,76 @@ def test_mismatched_totals_points_are_not_matched():
     assert len(arbs) == 0, f"expected 0 arbs (different total lines), got {len(arbs)}"
 
 
+def test_player_prop_arb_is_found():
+    """A prop market key (anything not in h2h/spreads/totals) is matched
+    by player identity (outcome['description']) + point, same Over/Under
+    shape as totals. Confirmed outcome shape from The Odds API's own docs:
+    {"name": "Over", "description": "David Blough", "price": -205,
+    "point": 0.5}."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "player_pass_tds", "outcomes": [
+                {"name": "Over", "description": "Patrick Mahomes", "price": -102, "point": 1.5},
+                {"name": "Under", "description": "Patrick Mahomes", "price": -130, "point": 1.5},
+            ]},
+        ]),
+        _bookmaker("draftkings", "DraftKings", [
+            {"key": "player_pass_tds", "outcomes": [
+                {"name": "Over", "description": "Patrick Mahomes", "price": -115, "point": 1.5},
+                {"name": "Under", "description": "Patrick Mahomes", "price": 115, "point": 1.5},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "draftkings"}, {})
+    assert len(arbs) == 1, f"expected 1 player prop arb, got {len(arbs)}"
+    assert "Patrick Mahomes" in arbs[0]["legs"][0]["selection"]
+
+
+def test_different_players_same_market_are_not_matched():
+    """Bug pattern from the SharpAPI build, re-verified here: a market key
+    shared by two different players (e.g. two QBs' passing TD props in the
+    same game) must never be matched against each other, just because
+    they share a market_key. Unlike the SharpAPI build - where this had to
+    be solved by excluding player props entirely, since matching required
+    fragile free-text name parsing - this API gives a structured
+    'description' field, so the fix here is using it as part of the
+    grouping key instead of avoiding props altogether."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "player_pass_tds", "outcomes": [
+                {"name": "Over", "description": "Quarterback One", "price": -115, "point": 1.5},
+            ]},
+        ]),
+        _bookmaker("draftkings", "DraftKings", [
+            {"key": "player_pass_tds", "outcomes": [
+                {"name": "Under", "description": "Quarterback Two", "price": 110, "point": 1.5},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "draftkings"}, {})
+    assert len(arbs) == 0, f"expected 0 arbs (different players), got {len(arbs)}"
+
+
+def test_prop_outcome_missing_player_name_is_skipped():
+    """An outcome with no description can't be safely grouped by player -
+    must be skipped rather than guessed at or matched against an
+    unrelated outcome."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "player_pass_tds", "outcomes": [
+                {"name": "Over", "price": -115, "point": 1.5},  # no description
+            ]},
+        ]),
+        _bookmaker("draftkings", "DraftKings", [
+            {"key": "player_pass_tds", "outcomes": [
+                {"name": "Under", "price": 110, "point": 1.5},  # no description
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "draftkings"}, {})
+    assert len(arbs) == 0, f"expected 0 arbs (no player name to group by), got {len(arbs)}"
+
+
 def test_unrealistic_profit_percent_is_excluded():
     """Same sanity-cap philosophy as the SharpAPI build - an implausibly
     large implied profit is far more likely a data/matching problem than
@@ -281,6 +351,7 @@ def test_format_selection_helper():
     assert _format_selection("spreads", "Team A", -6.5) == "Team A -6.5"
     assert _format_selection("spreads", "Team B", 6.5) == "Team B +6.5"
     assert _format_selection("totals", "Over", 48.5) == "Over 48.5"
+    assert _format_selection("player_pass_tds", "Over", 1.5, "Patrick Mahomes") == "Patrick Mahomes - Over 1.5"
 
 
 ALL_TESTS = [
@@ -291,6 +362,9 @@ ALL_TESTS = [
     test_spread_conflicting_favorite_is_rejected,
     test_totals_over_under_arb_is_found,
     test_mismatched_totals_points_are_not_matched,
+    test_player_prop_arb_is_found,
+    test_different_players_same_market_are_not_matched,
+    test_prop_outcome_missing_player_name_is_skipped,
     test_unrealistic_profit_percent_is_excluded,
     test_live_event_is_flagged,
     test_outright_only_leagues_are_excluded,

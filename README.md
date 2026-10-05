@@ -27,6 +27,12 @@ accurate arbs in practice.
   by this app, adapting the same "best price per complementary side,
   grouped by a line-agnostic canonical key" approach proven in the SharpAPI
   build's `compute_arbs_from_odds`.
+- **Player props ARE scanned, unlike the SharpAPI build** — see "Player
+  props" below. The SharpAPI build excluded them entirely because matching
+  two different players sharing a market type reliably would have meant
+  parsing free-text names, judged too fragile to trust with real money.
+  This API gives a structured player name per outcome instead, which
+  closes that gap.
 - **Usage is a monthly credit quota, not a requests-per-minute limit.**
   Cost per call = `markets × regions` (or `markets × ⌈bookmakers/10⌉` when
   using an explicit bookmaker list). The exact quota for this account's
@@ -76,6 +82,45 @@ only a US or UK key exists) but haven't been validated the way FD/DK/
 theScore Bet have. Treat any arb involving those three as unverified until
 spot-checked against the real sportsbook.
 
+## Player props
+
+Player props live behind a different, more expensive part of The Odds
+API than the bulk `h2h`/`spreads`/`totals` scan: one `GET event markets`
+call (1 credit flat, confirmed) to discover what's actually offered for a
+specific game, then one `GET event odds` call to fetch those markets'
+prices. This build does both automatically, per scan, but **bounded to the
+first `MAX_EVENTS_FOR_PROP_SCAN` (6) events** of whatever the core scan
+already returned — a broad "All Leagues"/"All Sports" scan does NOT get
+every game checked for props, to keep quota cost predictable.
+
+There is deliberately **no hardcoded list of player prop market keys**
+anywhere in this app. Confirmed examples in their docs show prop naming
+genuinely differs by sport (NFL/NBA use a `player_` prefix, MLB uses
+`batter_`/`pitcher_`), and this build never had their full market-key
+reference page to transcribe a complete, trustworthy list from. Instead,
+`discover_prop_markets_for_event()` asks the API live, per event, what's
+actually being offered right now, and scans whatever comes back — correct
+for any sport without needing to know its specific market-key vocabulary
+in advance.
+
+**To see the real, live list yourself** for any sport: hit
+`/api/test-events?sport=<sport_key>` to grab a real event id (free, no
+quota cost), then `/api/test-event-markets?sport=<sport_key>&event_id=<id>`
+to see every market key actually available for that game right now (1
+credit). This is the authoritative source — more accurate than any static
+list, since it reflects exactly what's live at that moment.
+
+Matching logic (`compute_arbs_from_events` in `app.py`): a prop outcome's
+`description` field (confirmed real — e.g. `{"name": "Over",
+"description": "David Blough", "price": -205, "point": 0.5}`) is the
+player's name, and becomes part of the grouping key alongside the market
+key and point. This is what lets two different players' prop lines in
+the same game share a market_type without ever being matched against each
+other — exactly the risk that made the SharpAPI build exclude props
+entirely, solved here instead of avoided, because this API's structured
+player field doesn't require fragile free-text parsing the way SharpAPI's
+did.
+
 ## Setup
 
 1. Copy `.env.example` to `.env` (or set the same variables in Railway's
@@ -97,9 +142,12 @@ as the SharpAPI build) rather than failing outright.
 python tests.py
 ```
 
-13 tests covering: same-book rejection, cross-book moneyline/spread/totals
+17 tests covering: same-book rejection, cross-book moneyline/spread/totals
 matching, true-complement vs. conflicting-favorite spread detection,
-mismatched total-line rejection, the profit sanity cap, live-event
+mismatched total-line rejection, player-prop matching by player identity
+(including two different players sharing a market never being matched,
+and an outcome with no player name being skipped rather than guessed at),
+outright/futures-league exclusion, the profit sanity cap, live-event
 detection, and the core schema-adaptation helpers
 (`_selection_side`, `_canonical_point`, `_american_to_decimal`,
 `_format_selection`). All fixtures use realistic, single-digit profit
@@ -110,9 +158,16 @@ the wrong thing once the sanity cap was tightened.
 ## Open questions
 
 - **Actual quota for this account's plan** — needed to design real
-  auto-refresh pacing instead of the placeholder currently in place.
+  auto-refresh pacing instead of the placeholder currently in place, and
+  to know how aggressively `MAX_EVENTS_FOR_PROP_SCAN` can safely scale up.
 - **`includeLinks` response shape** — needed to wire up the "Bet ↗"
   button; not yet confirmed from docs.
 - **Whether Bally Bet/Betway/Caesars are trustworthy without a
   jurisdiction-specific key** — only FanDuel/DraftKings/theScore Bet have
   been validated so far.
+- **Whether player props require a paid plan** — the current (non-
+  historical) event-odds endpoint had no "paid plans only" note in
+  anything pasted into this build (only the historical endpoints did), so
+  this was built assuming it's free-tier accessible. Confirm by checking
+  whether `/api/test-event-markets` (see "Player props" above) returns
+  real data or a plan-restriction error on the live account.

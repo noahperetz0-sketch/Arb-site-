@@ -27,14 +27,43 @@ ODDS_API_BOOKS = os.environ.get(
     "fanduel,draftkings,betmgm_ca_on,betrivers_ca_on,betano_ca_on,espnbet",
 )
 
-# Only h2h (moneyline), spreads and totals are ever requested. Player props
-# are technically available on this API but only through a much more
-# expensive per-event call (one request per game, not one request per
-# sport) - and this site excludes player props from arb detection entirely
-# regardless of provider (matching two different players' prop lines
-# reliably requires parsing free-text names, judged too fragile to trust
-# with real money in the SharpAPI build this one is being compared against).
+# The three "core" markets, pulled in bulk (one call per league covers every
+# game). Player props are NOT included here - they live behind a separate
+# per-event endpoint and are handled by the prop-scanning path below
+# (discover_prop_markets_for_event / fetch_event_odds), not this constant.
 MARKETS = "h2h,spreads,totals"
+
+# Market keys already covered by the bulk MARKETS scan - anything else a
+# GET event markets call returns for a game is treated as a prop market
+# worth fetching. This is deliberately NOT a hardcoded list of known prop
+# market keys (e.g. "player_points", "batter_hits") - confirmed examples in
+# The Odds API's own docs show prop naming genuinely varies by sport (NFL/
+# NBA use a player_ prefix, MLB uses batter_/pitcher_), and this build
+# never had their full market-key reference page to transcribe a complete,
+# trustworthy list from. Discovering what's actually offered per event,
+# live, is the only approach that can't miss a real market or invent one
+# that 422s.
+_CORE_MARKET_KEYS = {
+    "h2h", "h2h_lay", "spreads", "totals",
+    "outrights", "outrights_lay", "alternate_spreads", "alternate_totals",
+}
+
+# Player-prop scanning costs real, separate quota per event (1 credit for
+# the markets-discovery call, confirmed flat rate regardless of regions
+# requested, plus the usual markets x regions cost for the follow-up odds
+# call) - unlike the core h2h/spreads/totals scan, which covers an entire
+# league in one call. Bounded here so a broad "All Leagues"/"All Sports"
+# scan can't silently multiply that cost across dozens of games in one
+# request - only the first MAX_EVENTS_FOR_PROP_SCAN events (by whatever
+# order the bulk scan returned them in) get checked for props per request.
+MAX_EVENTS_FOR_PROP_SCAN = 6
+
+# Regions requested on the markets-discovery call. Confirmed flat cost (1
+# credit) regardless of how many regions are listed, so there's no reason
+# to narrow this to only the regions covering the user's selected books -
+# requesting broadly here just means a more complete picture of what's
+# available, at no extra quota cost.
+DISCOVERY_REGIONS = "us,us2,us_dfs,us_ex,ca,uk,au,eu"
 
 # Real cross-book arbs are almost always single-digit percentages - anything
 # wildly above that is far more likely to be a data/matching glitch than
@@ -310,6 +339,103 @@ def fetch_odds_for_league(sport_key, bookmakers):
     return resp.json()
 
 
+def fetch_event_markets(sport_key, event_id):
+    """GET /v4/sports/{sport}/events/{eventId}/markets - confirmed real.
+    Returns, per bookmaker, every market key recently seen for this event -
+    "not a comprehensive list of all supported markets" per their own docs
+    (it fills in as kickoff approaches), but the live, authoritative answer
+    to "what's actually offered right now" rather than a guessed static
+    list. Confirmed flat cost: 1 usage credit regardless of how many
+    regions are requested."""
+    resp = requests.get(
+        f"{ODDS_API_BASE_URL}/v4/sports/{sport_key}/events/{event_id}/markets",
+        params={"apiKey": ODDS_API_KEY, "regions": DISCOVERY_REGIONS},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def discover_prop_markets_for_event(sport_key, event_id, allowed_books):
+    """Returns the set of non-core market keys (see _CORE_MARKET_KEYS) any
+    of the allowed books is actually offering for this one event right
+    now - the list to pass to fetch_event_odds, built from live data
+    instead of a hardcoded guess at market key names."""
+    try:
+        data = fetch_event_markets(sport_key, event_id)
+    except Exception:
+        return set()
+    found = set()
+    for bookmaker in data.get("bookmakers", []):
+        if allowed_books and bookmaker.get("key") not in allowed_books:
+            continue
+        for market in bookmaker.get("markets", []):
+            key = market.get("key")
+            if key and key not in _CORE_MARKET_KEYS:
+                found.add(key)
+    return found
+
+
+def fetch_event_odds(sport_key, event_id, bookmakers, markets):
+    """GET /v4/sports/{sport}/events/{eventId}/odds - confirmed real, same
+    bookmakers= override behavior as the bulk /odds endpoint. Used here
+    only for the prop market keys discover_prop_markets_for_event found -
+    core markets are already covered by the cheaper bulk league-wide call."""
+    resp = requests.get(
+        f"{ODDS_API_BASE_URL}/v4/sports/{sport_key}/events/{event_id}/odds",
+        params={
+            "apiKey": ODDS_API_KEY,
+            "bookmakers": bookmakers,
+            "markets": markets,
+            "oddsFormat": "american",
+            "dateFormat": "iso",
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def attach_prop_odds(events, bookmakers_param, allowed_books):
+    """For the first MAX_EVENTS_FOR_PROP_SCAN events, discovers whatever
+    prop markets are actually live for this event/book combination and
+    merges their odds into that event's own bookmakers list in place, so
+    compute_arbs_from_events sees core and prop markets together per event
+    without needing to know they came from different API calls. Mutates
+    and returns `events`. Silently skips an event on any fetch failure
+    (a 422/empty prop response for one game shouldn't drop its core-market
+    arbs, which were already fetched successfully)."""
+    for event in events[:MAX_EVENTS_FOR_PROP_SCAN]:
+        sport_key = event.get("sport_key")
+        event_id = event.get("id")
+        if not sport_key or not event_id:
+            continue
+
+        prop_keys = discover_prop_markets_for_event(sport_key, event_id, allowed_books)
+        if not prop_keys:
+            continue
+
+        try:
+            prop_data = fetch_event_odds(sport_key, event_id, bookmakers_param, ",".join(prop_keys))
+        except Exception:
+            continue
+
+        markets_by_book = {b.get("key"): b.get("markets", []) for b in prop_data.get("bookmakers", [])}
+        for bookmaker in event.get("bookmakers", []):
+            extra_markets = markets_by_book.get(bookmaker.get("key"))
+            if extra_markets:
+                bookmaker.setdefault("markets", []).extend(extra_markets)
+        # A book that had no CORE-market data for this event (so it isn't
+        # in event["bookmakers"] yet) but does have prop data would be
+        # silently dropped by the loop above - add it as a new entry.
+        existing_book_keys = {b.get("key") for b in event.get("bookmakers", [])}
+        for book_key, extra_markets in markets_by_book.items():
+            if book_key not in existing_book_keys and extra_markets:
+                event.setdefault("bookmakers", []).append({"key": book_key, "markets": extra_markets})
+
+    return events
+
+
 def _american_to_decimal(price):
     if not isinstance(price, (int, float)):
         return None
@@ -357,25 +483,54 @@ def _canonical_point(market_key, outcome, home_team, away_team):
     return -point if side == "away" else point
 
 
-def _format_selection(market_key, name, point):
+def _format_selection(market_key, name, point, subject=None):
+    """subject is the player's name (outcome.description) for a prop
+    market - None for h2h/spreads/totals, which have no such field."""
     if market_key == "totals" and point is not None:
-        return f"{name} {point:g}"
-    if market_key == "spreads" and point is not None:
+        base = f"{name} {point:g}"
+    elif market_key == "spreads" and point is not None:
         sign = "+" if point > 0 else ""
-        return f"{name} {sign}{point:g}"
-    return name
+        base = f"{name} {sign}{point:g}"
+    elif subject and point is not None:
+        base = f"{name} {point:g}"  # prop markets follow the same Over/Under + point shape as totals
+    else:
+        base = name
+    return f"{subject} - {base}" if subject else base
 
 
 _MARKET_LABELS = {"h2h": "Moneyline", "spreads": "Point Spread", "totals": "Total"}
+
+
+def _market_label(market_key):
+    """Human-readable label for a market key. The three core markets get a
+    hand-picked label; anything else (a prop market key, discovered live -
+    see _CORE_MARKET_KEYS) is humanized from the key itself rather than
+    looked up in a hardcoded table, since this build never had The Odds
+    API's full market-key reference page to build a complete, trustworthy
+    one from."""
+    if market_key in _MARKET_LABELS:
+        return _MARKET_LABELS[market_key]
+    return market_key.replace("_", " ").title()
 
 
 def compute_arbs_from_events(events, allowed_books, league_title_by_key):
     """Adapts the same 'best price per complementary side, grouped by a
     line-agnostic canonical key' approach the SharpAPI build uses (see that
     project's compute_arbs_from_odds) to this API's per-event/per-bookmaker/
-    per-market response shape. Only h2h/spreads/totals are ever present
-    here (see MARKETS) - player props are out of scope for arb detection on
-    this site regardless of provider."""
+    per-market response shape.
+
+    Handles both core markets (h2h/spreads/totals, matched by team side)
+    and player-prop markets (any other market key - matched by player
+    identity instead, via each outcome's "description" field, confirmed
+    present on prop outcomes per The Odds API's own docs example:
+    {"name": "Over", "description": "David Blough", "price": -205,
+    "point": 0.5}). A prop market's grouping key includes that player name
+    specifically so two different players sharing one market_type (e.g.
+    two QBs' passing TD props in the same game) are never matched against
+    each other - the same risk the SharpAPI build's player-prop exclusion
+    was built to avoid, solved here instead of avoided, since this API
+    gives a structured player field to match on rather than SharpAPI's
+    free-text selection string that made it too fragile to trust there."""
     now = datetime.now(timezone.utc)
     arbs = []
 
@@ -390,7 +545,8 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
         except (ValueError, AttributeError):
             pass
 
-        # (market_key, canonical_point) -> selection_type -> best leg so far
+        # (market_key, subject, canonical_point) -> selection_type -> best leg so far
+        # subject is None for h2h/spreads/totals, the player's name for props.
         markets = {}
         for bookmaker in event.get("bookmakers", []):
             book_key = bookmaker.get("key")
@@ -398,8 +554,7 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
                 continue
             for market in bookmaker.get("markets", []):
                 market_key = market.get("key")
-                if market_key not in _MARKET_LABELS:
-                    continue
+                is_prop = market_key not in _MARKET_LABELS
                 for outcome in market.get("outcomes", []):
                     name = outcome.get("name")
                     price = outcome.get("price")
@@ -407,8 +562,21 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
                     if not decimal_odds or decimal_odds <= 1:
                         continue
 
+                    subject = None
                     if market_key == "totals":
                         selection_type = (name or "").lower()  # "over" / "under"
+                        canonical_point = outcome.get("point")
+                    elif is_prop:
+                        # Confirmed shape: prop outcomes are "Over"/"Under"
+                        # on a named player (outcome["description"]), same
+                        # as totals but scoped to one player rather than
+                        # the whole game - without a usable player name,
+                        # this outcome can't be safely grouped, so skip it
+                        # rather than risk matching the wrong person.
+                        subject = outcome.get("description")
+                        if not subject:
+                            continue
+                        selection_type = (name or "").lower()
                         canonical_point = outcome.get("point")
                     else:
                         selection_type = _selection_side(name, home_team, away_team)
@@ -416,7 +584,7 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
                     if selection_type not in ("home", "away", "draw", "over", "under"):
                         continue
 
-                    group_key = (market_key, canonical_point)
+                    group_key = (market_key, subject, canonical_point)
                     by_selection = markets.setdefault(group_key, {})
                     existing = by_selection.get(selection_type)
                     if not existing or decimal_odds > existing["decimal_odds"]:
@@ -427,9 +595,10 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
                             "point": outcome.get("point"),
                             "price": price,
                             "decimal_odds": decimal_odds,
+                            "subject": subject,
                         }
 
-        for (market_key, canonical_point), by_selection in markets.items():
+        for (market_key, subject, canonical_point), by_selection in markets.items():
             legs = list(by_selection.values())
             if len(legs) < 2:
                 continue
@@ -444,8 +613,8 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
             if profit_percent > MAX_SANE_PROFIT_PERCENT:
                 continue
 
-            market_label = _MARKET_LABELS[market_key]
-            if canonical_point is not None:
+            market_label = _market_label(market_key)
+            if canonical_point is not None and not subject:
                 market_label += f" ({canonical_point:g})"
 
             arb_legs = []
@@ -453,7 +622,7 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
                 stake_percent = (1.0 / leg["decimal_odds"]) / implied_sum * 100
                 arb_legs.append({
                     "sportsbook": leg["bookmaker_title"],
-                    "selection": _format_selection(market_key, leg["name"], leg["point"]),
+                    "selection": _format_selection(market_key, leg["name"], leg["point"], leg["subject"]),
                     "odds_american": _format_american_odds(leg["price"]),
                     "stake_percent": round(stake_percent, 2),
                     # includeLinks is documented as adding bookmaker links
@@ -530,6 +699,46 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/test-events")
+def api_test_events():
+    """Diagnostic route: GET /v4/sports/{sport}/events - confirmed free,
+    doesn't cost usage quota. Use this to grab a real event id for
+    /api/test-event-markets below, e.g.
+    /api/test-events?sport=basketball_nba"""
+    if not ODDS_API_KEY:
+        return jsonify({"error": "ODDS_API_KEY not set"}), 200
+    sport_key = request.args.get("sport", DEFAULT_LEAGUE_KEY)
+    resp = requests.get(
+        f"{ODDS_API_BASE_URL}/v4/sports/{sport_key}/events",
+        params={"apiKey": ODDS_API_KEY},
+        timeout=10,
+    )
+    return jsonify({"status_code": resp.status_code, "body": resp.json() if resp.ok else resp.text[:800]})
+
+
+@app.route("/api/test-event-markets")
+def api_test_event_markets():
+    """Diagnostic route: shows exactly which market keys (core AND prop)
+    are actually live for one real event right now, straight from The
+    Odds API's own GET event markets endpoint - the authoritative, live
+    answer to "what player props exist for this game" that this build
+    uses internally (see discover_prop_markets_for_event) instead of a
+    guessed static list. Costs 1 usage credit per call (confirmed flat
+    rate). Usage: /api/test-event-markets?sport=basketball_nba&event_id=<id
+    from /api/test-events>"""
+    if not ODDS_API_KEY:
+        return jsonify({"error": "ODDS_API_KEY not set"}), 200
+    sport_key = request.args.get("sport", DEFAULT_LEAGUE_KEY)
+    event_id = request.args.get("event_id", "")
+    if not event_id:
+        return jsonify({"error": "missing event_id param - get one from /api/test-events first"}), 200
+    try:
+        data = fetch_event_markets(sport_key, event_id)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 200
+    return jsonify(data)
+
+
 @app.route("/api/arbs")
 def api_arbs():
     if not ODDS_API_KEY:
@@ -581,6 +790,13 @@ def api_arbs():
             "error": "; ".join(f"{k}: {v}" for k, v in league_issues.items()),
             "arbs": MOCK_ARBS,
         }), 200
+
+    # Player props (see attach_prop_odds) are layered onto the already-
+    # fetched core-market events in place, bounded to the first
+    # MAX_EVENTS_FOR_PROP_SCAN - this is extra quota cost on top of the
+    # core scan above, so it's deliberately capped rather than applied to
+    # every event in a broad "All Leagues" scan.
+    attach_prop_odds(all_events, bookmakers_param, allowed_books)
 
     arbs = compute_arbs_from_events(all_events, allowed_books, league_title_by_key)
 
