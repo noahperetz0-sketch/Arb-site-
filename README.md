@@ -93,22 +93,45 @@ first `MAX_EVENTS_FOR_PROP_SCAN` (6) events** of whatever the core scan
 already returned — a broad "All Leagues"/"All Sports" scan does NOT get
 every game checked for props, to keep quota cost predictable.
 
-There is deliberately **no hardcoded list of player prop market keys**
-anywhere in this app. Confirmed examples in their docs show prop naming
-genuinely differs by sport (NFL/NBA use a `player_` prefix, MLB uses
-`batter_`/`pitcher_`), and this build never had their full market-key
-reference page to transcribe a complete, trustworthy list from. Instead,
+**Scanning never depends on a hardcoded list of player prop market keys.**
 `discover_prop_markets_for_event()` asks the API live, per event, what's
 actually being offered right now, and scans whatever comes back — correct
 for any sport without needing to know its specific market-key vocabulary
-in advance.
+in advance, and automatically picks up a market The Odds API adds later
+without a code change.
 
-**To see the real, live list yourself** for any sport: hit
+**Display labels DO use a confirmed table now** (`PROP_MARKET_LABELS` in
+`app.py`) — transcribed from The Odds API's own "Player Props API Markets"
+reference page (NFL/NCAAF/CFL, NBA/NCAAB/WNBA, MLB, NHL, main + alternate
+variants), so a real arb shows "Pass Touchdowns" instead of an
+auto-humanized "Player Pass Tds". A market key missing from that table
+(not yet transcribed, or a sport this table doesn't cover) still scans
+correctly — `_market_label()` just falls back to humanizing the raw key
+for display.
+
+**Confirmed coverage caveat, same reference page**: *"Coverage of player
+props is mainly limited to US sports and US bookmakers at this time."*
+In practice this likely means FanDuel/DraftKings/theScore Bet (this
+site's US-wide books) are the ones actually worth scanning for props —
+the Ontario-specific books (`betmgm_ca_on`/`betrivers_ca_on`/
+`betano_ca_on`) may have little or no prop data. Confirm for your own
+books with `/api/test-event-markets` (see below) rather than assuming
+either way.
+
+**Yes/No markets are matched too**, not just Over/Under — confirmed real
+examples include anytime-TD-scorer, anytime-goal-scorer, and
+double-double props, which use `"Yes"`/`"No"` outcome names instead.
+Categorical markets with more than two outcomes (e.g.
+`player_method_of_first_basket`) aren't matched — this app's matching
+model is two-sided only, same as every other market here.
+
+**To see the real, live list yourself** for any sport/book: hit
 `/api/test-events?sport=<sport_key>` to grab a real event id (free, no
 quota cost), then `/api/test-event-markets?sport=<sport_key>&event_id=<id>`
 to see every market key actually available for that game right now (1
-credit). This is the authoritative source — more accurate than any static
-list, since it reflects exactly what's live at that moment.
+credit) — including whether a specific Ontario book has any prop markets
+at all for it. This is the authoritative source — more accurate than any
+static list, since it reflects exactly what's live at that moment.
 
 Matching logic (`compute_arbs_from_events` in `app.py`): a prop outcome's
 `description` field (confirmed real — e.g. `{"name": "Over",
@@ -142,12 +165,13 @@ as the SharpAPI build) rather than failing outright.
 python tests.py
 ```
 
-17 tests covering: same-book rejection, cross-book moneyline/spread/totals
+18 tests covering: same-book rejection, cross-book moneyline/spread/totals
 matching, true-complement vs. conflicting-favorite spread detection,
 mismatched total-line rejection, player-prop matching by player identity
-(including two different players sharing a market never being matched,
-and an outcome with no player name being skipped rather than guessed at),
-outright/futures-league exclusion, the profit sanity cap, live-event
+(Over/Under AND Yes/No outcome shapes, two different players sharing a
+market never being matched, and an outcome with no player name being
+skipped rather than guessed at), outright/futures-league exclusion, the
+profit sanity cap, live-event
 detection, and the core schema-adaptation helpers
 (`_selection_side`, `_canonical_point`, `_american_to_decimal`,
 `_format_selection`). All fixtures use realistic, single-digit profit

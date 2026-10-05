@@ -256,6 +256,28 @@ def test_prop_outcome_missing_player_name_is_skipped():
     assert len(arbs) == 0, f"expected 0 arbs (no player name to group by), got {len(arbs)}"
 
 
+def test_yes_no_prop_arb_is_found():
+    """Confirmed real market shape (per The Odds API's own Player Props
+    reference page): 'anytime touchdown scorer'-style props use Yes/No
+    outcomes, not Over/Under - same two-sided structure, must still be
+    matched the same way as an Over/Under prop."""
+    event = _event(bookmakers=[
+        _bookmaker("fanduel", "FanDuel", [
+            {"key": "player_anytime_td", "outcomes": [
+                {"name": "Yes", "description": "Travis Kelce", "price": 140},
+            ]},
+        ]),
+        _bookmaker("draftkings", "DraftKings", [
+            {"key": "player_anytime_td", "outcomes": [
+                {"name": "No", "description": "Travis Kelce", "price": -105},
+            ]},
+        ]),
+    ])
+    arbs = compute_arbs_from_events([event], {"fanduel", "draftkings"}, {})
+    assert len(arbs) == 1, f"expected 1 Yes/No prop arb, got {len(arbs)}"
+    assert "Travis Kelce" in arbs[0]["legs"][0]["selection"]
+
+
 def test_unrealistic_profit_percent_is_excluded():
     """Same sanity-cap philosophy as the SharpAPI build - an implausibly
     large implied profit is far more likely a data/matching problem than
@@ -365,6 +387,7 @@ ALL_TESTS = [
     test_player_prop_arb_is_found,
     test_different_players_same_market_are_not_matched,
     test_prop_outcome_missing_player_name_is_skipped,
+    test_yes_no_prop_arb_is_found,
     test_unrealistic_profit_percent_is_excluded,
     test_live_event_is_flagged,
     test_outright_only_leagues_are_excluded,

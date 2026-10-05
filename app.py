@@ -501,15 +501,127 @@ def _format_selection(market_key, name, point, subject=None):
 _MARKET_LABELS = {"h2h": "Moneyline", "spreads": "Point Spread", "totals": "Total"}
 
 
+# Confirmed real market key -> display name, transcribed from The Odds
+# API's own "Player Props API Markets" reference page (pasted by the site's
+# owner) - NFL/NCAAF/CFL, NBA/NCAAB/WNBA, MLB and NHL sections, both the
+# main and "alternate" (milestone/different-line) variants of each. Used
+# only for a nicer Market column label - the discovery mechanism itself
+# (discover_prop_markets_for_event) doesn't depend on this table at all,
+# so a market key missing from here still scans correctly, just falls back
+# to a humanized version of the raw key (see _market_label).
+#
+# Confirmed caveat from the same page: "Coverage of player props is mainly
+# limited to US sports and US bookmakers at this time" - so this site's
+# Ontario-specific books (betmgm_ca_on/betrivers_ca_on/betano_ca_on) may
+# have little or no prop data; FanDuel/DraftKings/theScore Bet are the
+# books most likely to actually have props to scan.
+PROP_MARKET_LABELS = {
+    # NFL / NCAAF / CFL
+    "player_assists": "Assists",
+    "player_defensive_interceptions": "Defensive Interceptions",
+    "player_field_goals": "Field Goals",
+    "player_kicking_points": "Kicking Points",
+    "player_pass_attempts": "Pass Attempts",
+    "player_pass_completions": "Pass Completions",
+    "player_pass_interceptions": "Pass Interceptions",
+    "player_pass_longest_completion": "Longest Pass Completion",
+    "player_pass_rush_yds": "Pass + Rush Yards",
+    "player_pass_rush_reception_tds": "Pass + Rush + Reception TDs",
+    "player_pass_rush_reception_yds": "Pass + Rush + Reception Yards",
+    "player_pass_tds": "Pass Touchdowns",
+    "player_pass_yds": "Pass Yards",
+    "player_pass_yds_q1": "1st Quarter Pass Yards",
+    "player_pats": "Points After Touchdown",
+    "player_receptions": "Receptions",
+    "player_reception_longest": "Longest Reception",
+    "player_reception_tds": "Reception Touchdowns",
+    "player_reception_yds": "Reception Yards",
+    "player_rush_attempts": "Rush Attempts",
+    "player_rush_longest": "Longest Rush",
+    "player_rush_reception_tds": "Rush + Reception TDs",
+    "player_rush_reception_yds": "Rush + Reception Yards",
+    "player_rush_tds": "Rush Touchdowns",
+    "player_rush_yds": "Rush Yards",
+    "player_sacks": "Sacks",
+    "player_solo_tackles": "Solo Tackles",
+    "player_tackles_assists": "Tackles + Assists",
+    "player_tds_over": "Touchdowns",
+    "player_tds": "Touchdowns",
+    "player_1st_td": "1st Touchdown Scorer",
+    "player_anytime_td": "Anytime Touchdown Scorer",
+    "player_last_td": "Last Touchdown Scorer",
+    # NBA / NCAAB / WNBA
+    "player_points": "Points",
+    "player_points_q1": "1st Quarter Points",
+    "player_rebounds": "Rebounds",
+    "player_rebounds_q1": "1st Quarter Rebounds",
+    "player_assists_q1": "1st Quarter Assists",
+    "player_threes": "Threes",
+    "player_blocks": "Blocks",
+    "player_steals": "Steals",
+    "player_blocks_steals": "Blocks + Steals",
+    "player_turnovers": "Turnovers",
+    "player_points_rebounds_assists": "Points + Rebounds + Assists",
+    "player_points_rebounds": "Points + Rebounds",
+    "player_points_assists": "Points + Assists",
+    "player_rebounds_assists": "Rebounds + Assists",
+    "player_frees_made": "Free Throws Made",
+    "player_frees_attempts": "Free Throws Attempted",
+    "player_first_basket": "First Basket Scorer",
+    "player_first_team_basket": "First Basket Scorer on Team",
+    "player_double_double": "Double Double",
+    "player_triple_double": "Triple Double",
+    "player_method_of_first_basket": "Method of First Basket",
+    "player_fantasy_points": "Fantasy Points",
+    # MLB
+    "batter_home_runs": "Batter Home Runs",
+    "batter_first_home_run": "Batter First Home Run",
+    "batter_hits": "Batter Hits",
+    "batter_total_bases": "Batter Total Bases",
+    "batter_rbis": "Batter RBIs",
+    "batter_runs_scored": "Batter Runs Scored",
+    "batter_hits_runs_rbis": "Batter Hits + Runs + RBIs",
+    "batter_singles": "Batter Singles",
+    "batter_doubles": "Batter Doubles",
+    "batter_triples": "Batter Triples",
+    "batter_walks": "Batter Walks",
+    "batter_strikeouts": "Batter Strikeouts",
+    "batter_stolen_bases": "Batter Stolen Bases",
+    "batter_fantasy_score": "Batter Fantasy Points",
+    "pitcher_strikeouts": "Pitcher Strikeouts",
+    "pitcher_record_a_win": "Pitcher to Record a Win",
+    "pitcher_hits_allowed": "Pitcher Hits Allowed",
+    "pitcher_walks": "Pitcher Walks",
+    "pitcher_earned_runs": "Pitcher Earned Runs",
+    "pitcher_outs": "Pitcher Outs",
+    # NHL
+    "player_power_play_points": "Power Play Points",
+    "player_blocked_shots": "Blocked Shots",
+    "player_shots_on_goal": "Shots on Goal",
+    "player_goals": "Goals",
+    "player_total_saves": "Total Saves",
+    "player_goal_scorer_first": "First Goal Scorer",
+    "player_goal_scorer_last": "Last Goal Scorer",
+    "player_goal_scorer_anytime": "Anytime Goal Scorer",
+}
+# "Alternate" variants (milestone/different-line versions of the same
+# stat) share the same display name as their main market, suffixed - same
+# source page, "Alternate NFL/NBA/MLB/NHL Player Props API" sections.
+for _key, _label in list(PROP_MARKET_LABELS.items()):
+    PROP_MARKET_LABELS.setdefault(f"{_key}_alternate", f"{_label} (Alt)")
+
+
 def _market_label(market_key):
     """Human-readable label for a market key. The three core markets get a
-    hand-picked label; anything else (a prop market key, discovered live -
-    see _CORE_MARKET_KEYS) is humanized from the key itself rather than
-    looked up in a hardcoded table, since this build never had The Odds
-    API's full market-key reference page to build a complete, trustworthy
-    one from."""
+    hand-picked label, every confirmed real prop market key gets its real
+    name from PROP_MARKET_LABELS, and anything else (a prop market this
+    build doesn't have a confirmed name for) falls back to a humanized
+    version of the raw key - scanning never depends on this table, only
+    display does (see discover_prop_markets_for_event)."""
     if market_key in _MARKET_LABELS:
         return _MARKET_LABELS[market_key]
+    if market_key in PROP_MARKET_LABELS:
+        return PROP_MARKET_LABELS[market_key]
     return market_key.replace("_", " ").title()
 
 
@@ -567,12 +679,16 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
                         selection_type = (name or "").lower()  # "over" / "under"
                         canonical_point = outcome.get("point")
                     elif is_prop:
-                        # Confirmed shape: prop outcomes are "Over"/"Under"
-                        # on a named player (outcome["description"]), same
-                        # as totals but scoped to one player rather than
-                        # the whole game - without a usable player name,
-                        # this outcome can't be safely grouped, so skip it
-                        # rather than risk matching the wrong person.
+                        # Confirmed shape: most prop outcomes are "Over"/
+                        # "Under" on a named player (outcome["description"]);
+                        # confirmed real exceptions, per The Odds API's own
+                        # Player Props reference page, are "Yes"/"No"
+                        # markets (anytime TD/goal scorer, double-double,
+                        # etc.) - same two-sided structure, just different
+                        # outcome names, so both are handled the same way
+                        # here. Without a usable player name, this outcome
+                        # can't be safely grouped, so skip it rather than
+                        # risk matching the wrong person.
                         subject = outcome.get("description")
                         if not subject:
                             continue
@@ -581,7 +697,7 @@ def compute_arbs_from_events(events, allowed_books, league_title_by_key):
                     else:
                         selection_type = _selection_side(name, home_team, away_team)
                         canonical_point = _canonical_point(market_key, outcome, home_team, away_team)
-                    if selection_type not in ("home", "away", "draw", "over", "under"):
+                    if selection_type not in ("home", "away", "draw", "over", "under", "yes", "no"):
                         continue
 
                     group_key = (market_key, subject, canonical_point)
