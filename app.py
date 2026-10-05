@@ -18,13 +18,23 @@ ODDS_API_BASE_URL = os.environ.get("ODDS_API_BASE_URL", "https://api.the-odds-ap
 # confirmed-accurate US-wide books (FanDuel, DraftKings, theScore Bet -
 # confirmed accurate for Ontario by direct real-world comparison against
 # this site's SharpAPI build, which never caught a bad price on any of
-# these three) with the Ontario-specific book variants (BetMGM, BetRivers,
-# Betano) that DO need the region-specific key to get the right price -
-# exactly the class of bug (Caesars showing a US price in Ontario) that
-# motivated testing this provider in the first place.
+# these three) with the Ontario-specific book variants (BetMGM, Betano)
+# that DO need the region-specific key to get the right price - exactly
+# the class of bug (Caesars showing a US price in Ontario) that motivated
+# testing this provider in the first place.
+#
+# The owner explicitly chose betmgm_ca_on over the US betmgm here, with
+# the real tradeoff spelled out and accepted: a live spot-check found
+# betmgm_ca_on had NO data at all (not even core markets) for the one NHL
+# game tested - Ontario-specific correctness over broader coverage.
+#
+# williamhill_us (Caesars) is marked "Only available on paid subscriptions"
+# in the same bookmaker reference page - will likely contribute nothing on
+# a free-tier key until upgraded; included anyway since that's what was
+# asked for, not silently dropped.
 ODDS_API_BOOKS = os.environ.get(
     "ODDS_API_BOOKS",
-    "fanduel,draftkings,betmgm_ca_on,betrivers_ca_on,betano_ca_on,espnbet",
+    "fanduel,draftkings,betano_ca_on,betmgm_ca_on,williamhill_us,espnbet",
 )
 
 # The three "core" markets, pulled in bulk (one call per league covers every
