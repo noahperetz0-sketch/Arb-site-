@@ -855,6 +855,32 @@ def api_test_event_markets():
     return jsonify(data)
 
 
+@app.route("/api/test-event-odds")
+def api_test_event_odds():
+    """Diagnostic route: unlike /api/test-event-markets (which only shows
+    which market keys exist, no prices), this shows the ACTUAL odds for
+    specific markets on one event - the real prices arb detection would
+    compare. Costs markets x regions-of-bookmakers-requested in usage
+    quota (confirmed real cost formula, same as the main /odds endpoint).
+    Usage: /api/test-event-odds?sport=icehockey_nhl&event_id=<id from
+    /api/test-events>&markets=player_points,player_assists&bookmakers=
+    fanduel,draftkings (markets/bookmakers default to this site's own
+    ODDS_API_BOOKS/MARKETS if omitted)."""
+    if not ODDS_API_KEY:
+        return jsonify({"error": "ODDS_API_KEY not set"}), 200
+    sport_key = request.args.get("sport", DEFAULT_LEAGUE_KEY)
+    event_id = request.args.get("event_id", "")
+    if not event_id:
+        return jsonify({"error": "missing event_id param - get one from /api/test-events first"}), 200
+    markets = request.args.get("markets", MARKETS)
+    bookmakers = request.args.get("bookmakers", ODDS_API_BOOKS)
+    try:
+        data = fetch_event_odds(sport_key, event_id, bookmakers, markets)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 200
+    return jsonify(data)
+
+
 @app.route("/api/arbs")
 def api_arbs():
     if not ODDS_API_KEY:
