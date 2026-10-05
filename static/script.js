@@ -724,6 +724,9 @@ async function loadArbs() {
       statusEl.textContent = `Live data · ${shown} opportunit${shown === 1 ? "y" : "ies"} shown · updated ${new Date().toLocaleTimeString()}`;
     }
     statusEl.textContent += describeBookIssues(data.book_issues);
+    if (data.warning) {
+      statusEl.textContent += ` · ${data.warning}`;
+    }
 
     renderArbs();
   } catch (err) {

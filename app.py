@@ -108,6 +108,20 @@ _sports_cache = None  # (timestamp, [{"key","group","title","description","activ
 # confirmed (still an open question as of this build).
 MAX_LEAGUES_PER_SCAN = 6
 
+# Confirmed real failure, not a guess: a scan with ~70 bookmakers in the
+# `bookmakers` param (every catalog entry at once, via "Select All" on the
+# Sportsbooks panel) got a 422 Unprocessable Entity on every single league
+# - every individual key in that list is real and valid per The Odds
+# API's own bookmaker reference page, so the API is rejecting the COUNT,
+# not any specific key. No cap on bookmaker count was documented in
+# anything pasted into this build, so this number is a defensive guess,
+# not a confirmed limit - but it's clearly better than letting an
+# oversized selection fail every league in the scan at once the way it
+# just did. Truncates rather than erroring outright so a user who selects
+# too many still gets real results from however many books fit, with a
+# warning (see api_arbs()) rather than silence.
+MAX_BOOKMAKERS_PER_SCAN = 20
+
 # The sport groups this site's owner actually watches day to day -
 # preselected by default wherever the real /v4/sports response includes
 # them. Mirrors the same default sports as the SharpAPI build for an
@@ -911,6 +925,9 @@ def api_arbs():
         return jsonify(cached[1])
 
     resolved_books = [b.strip() for b in (selected_books or ODDS_API_BOOKS).split(",") if b.strip()]
+    books_truncated = len(resolved_books) > MAX_BOOKMAKERS_PER_SCAN
+    if books_truncated:
+        resolved_books = resolved_books[:MAX_BOOKMAKERS_PER_SCAN]
     bookmakers_param = ",".join(resolved_books)
     allowed_books = set(resolved_books)
 
@@ -959,6 +976,12 @@ def api_arbs():
         "book_issues": {},
         "league_issues": league_issues,
         "arbs": arbs,
+        "warning": (
+            f"Only the first {MAX_BOOKMAKERS_PER_SCAN} of your selected sportsbooks were scanned "
+            "(The Odds API rejects requests with too many bookmakers at once - confirmed via a real "
+            "failure at ~70, exact limit unconfirmed). Narrow your selection for full coverage."
+            if books_truncated else None
+        ),
     }
     _arbs_cache[cache_key] = (time.time(), payload)
     return jsonify(payload)
